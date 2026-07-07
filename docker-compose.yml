@@ -1,0 +1,47 @@
+# Data generation infrastructure only (MinIO, ClickHouse, Dagster are NOT here — they belong in the pipeline compose)
+networks:
+  retail-net:
+
+volumes:
+  pgdata_crm:
+
+services:
+  postgres_crm:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: crm_pass
+      POSTGRES_DB: crm_mock
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./simulation/sources/postgres_crm/init:/docker-entrypoint-initdb.d
+      - pgdata_crm:/var/lib/postgresql/data
+    networks:
+      - retail-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm_user -d crm_mock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mock_ecom_api:
+    build: ./simulation/sources/ecommerce_api
+    restart: "no"
+    ports:
+      - "8000:8000"
+    environment:
+      ECOM_DB_PATH: /app/store/ecom_store.db
+      CRM_DB_HOST: postgres_crm
+      CRM_DB_PORT: "5432"
+      CRM_DB_NAME: crm_mock
+      CRM_DB_USER: crm_user
+      CRM_DB_PASS: crm_pass
+    volumes:
+      - ./simulation/sources/ecommerce_api:/app
+    networks:
+      - retail-net
+    depends_on:
+      postgres_crm:
+        condition: service_healthy

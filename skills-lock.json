@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "dagster-expert": {
+      "source": "dagster-io/skills",
+      "sourceType": "github",
+      "skillPath": "skills/dagster-expert/skills/dagster-expert/SKILL.md",
+      "computedHash": "0de12b5fee0975ce5440efbea2f49016bfe6af3e6b0aba12a293bc03698939b4"
+    },
+    "documentation-writer": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/documentation-writer/SKILL.md",
+      "computedHash": "ee53d65b163cd7eb953a930c95841cfe398cc2c0bd24c06508bbaa07c432be35"
+    }
+  }
+}

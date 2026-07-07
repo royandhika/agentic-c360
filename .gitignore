@@ -1,0 +1,42 @@
+# ── Python ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# ── Environment ─────────────────────────────────────
+.env
+
+# ── Simulation generated artifacts ──────────────────
+simulation/.setup-done
+simulation/world/world.db
+simulation/sources/inbox/pos/sales_*.csv
+simulation/sources/ecommerce_api/store/ecom_store.db
+
+# ── dbt ─────────────────────────────────────────────
+logs/
+target/
+dbt_packages/
+profiles.yml
+
+# ── Streamlit ───────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── IDE / editors ───────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Docker ──────────────────────────────────────────
+docker-compose.override.yml

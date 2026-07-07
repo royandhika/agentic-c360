@@ -1,0 +1,36 @@
+# Deterministic seed for reproducibility
+seed: 42
+# Faker locale (always id_ID)
+locale: id_ID
+# Currency (always IDR)
+currency: IDR
+# Target daily rows total across all three sources (0–5000)
+# The generator randomly splits this across ecommerce, POS, CRM each day
+daily_volume_min: 0
+daily_volume_max: 5000
+# Each source's cap (random roll up to this per day)
+ecom_cap: 3500
+pos_cap: 1500
+crm_cap: 250
+
+# Messiness knobs (0.0 to 1.0)
+error_rate: 0.03          # e.g. 3% of rows have intentional errors
+dupe_rate: 0.005          # e.g. 0.5% of rows are near-duplicates
+# Schema drift year for POS CSVs (2022 or 2024)
+drift_year: 2024
+messiness_intensity: 0.05  # overall fuzz factor for strange data
+
+# Holiday uplift
+holiday_mode: false       # overrideable by --holiday flag in CLI
+# Paths
+pos_csv_dir: simulation/sources/inbox/pos
+ecom_db_path: simulation/sources/ecommerce_api/store/ecom_store.db
+world_db_path: simulation/world/world.db
+
+# CRM Postgres connection (matches docker-compose env vars)
+crm_db:
+  host: localhost
+  port: 5432
+  db_name: crm_mock
+  user: crm_user
+  password: crm_pass

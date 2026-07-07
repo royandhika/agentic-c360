@@ -1,0 +1,4 @@
+faker>=30
+pyyaml>=6
+click>=8
+psycopg2-binary>=2.9
