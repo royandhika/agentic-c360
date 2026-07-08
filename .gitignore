@@ -16,7 +16,8 @@ venv/
 simulation/.setup-done
 simulation/world/world.db
 simulation/sources/inbox/pos/sales_*.csv
-simulation/sources/ecommerce_api/store/ecom_store.db
+simulation/sources/vendor_api/store/vendor.db
+simulation/sources/crm_sftp/tickets/tickets_*.json
 
 # ── dbt ─────────────────────────────────────────────
 logs/
