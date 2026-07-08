@@ -58,4 +58,5 @@ volumes:
 
 networks:
   wanderfuel-net:
+    name: wanderfuel-net
     driver: bridge
