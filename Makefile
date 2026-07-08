@@ -1,4 +1,4 @@
-.PHONY: help setup infra-up infra-down generate backfill reset clean
+.PHONY: help setup infra-up infra-down generate backfill reset clean pipeline-build pipeline-up pipeline-down
 
 -include .env
 export
@@ -17,6 +17,9 @@ help: ## Show this help
 	@echo "  backfill     Run N simulation days (use DAYS=N, BACKFILL_START=YYYY-MM-DD)"
 	@echo "  reset        Wipe simulation state and generated artifacts"
 	@echo "  clean        Remove venv, marker, and __pycache__ dirs"
+	@echo "  pipeline-build  Build Dagster image"
+	@echo "  pipeline-up     Start all containers (simulation + pipeline)"
+	@echo "  pipeline-down   Stop all containers"
 
 .env:
 	@if [ ! -f .env ]; then \
@@ -61,3 +64,12 @@ clean:
 	rm -rf simulation/scripts/__pycache__
 	rm -rf simulation/sources/vendor_api/__pycache__ 2>/dev/null || true
 	sudo rm -rf simulation/sources/vendor_api/__pycache__ 2>/dev/null || true
+
+pipeline-build: .env
+	docker compose -f docker-compose.pipeline.yml build
+
+pipeline-up: .env
+	docker compose -f docker-compose.yml -f docker-compose.pipeline.yml up -d
+
+pipeline-down:
+	docker compose -f docker-compose.yml -f docker-compose.pipeline.yml down
