@@ -41,3 +41,11 @@ Thumbs.db
 
 # ── Docker ──────────────────────────────────────────
 docker-compose.override.yml
+
+# ── Dagster runtime state ────────────────────────────
+dagster_pipeline/dagster_home/.db
+dagster_pipeline/dagster_home/index.db
+dagster_pipeline/dagster_home/runs.db
+dagster_pipeline/dagster_home/schedules.db
+dagster_pipeline/dagster_home/.logs_queue/
+dagster_pipeline/dagster_home/.telemetry/
