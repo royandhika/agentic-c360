@@ -1,47 +1,61 @@
-# Data generation infrastructure only (MinIO, ClickHouse, Dagster are NOT here — they belong in the pipeline compose)
-networks:
-  retail-net:
-
-volumes:
-  pgdata_crm:
-
 services:
-  postgres_crm:
+  app_oltp:
     image: postgres:16
-    restart: unless-stopped
+    container_name: app_oltp
     environment:
-      POSTGRES_USER: crm_user
-      POSTGRES_PASSWORD: crm_pass
-      POSTGRES_DB: crm_mock
+      POSTGRES_USER: ${POSTGRES_APP_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_APP_PASS}
+      POSTGRES_DB: ${POSTGRES_APP_DB}
     ports:
       - "5432:5432"
     volumes:
-      - ./simulation/sources/postgres_crm/init:/docker-entrypoint-initdb.d
-      - pgdata_crm:/var/lib/postgresql/data
-    networks:
-      - retail-net
+      - postgres_app_data:/var/lib/postgresql/data
+      - ./simulation/sources/app_oltp/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crm_user -d crm_mock"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_APP_USER} -d ${POSTGRES_APP_DB}"]
+      interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - wanderfuel-net
 
-  mock_ecom_api:
-    build: ./simulation/sources/ecommerce_api
-    restart: "no"
+  vendor_api:
+    build:
+      context: ./simulation/sources/vendor_api
+      dockerfile: Dockerfile
+    container_name: vendor_api
+    user: "1000:1000"
     ports:
       - "8000:8000"
     environment:
-      ECOM_DB_PATH: /app/store/ecom_store.db
-      CRM_DB_HOST: postgres_crm
-      CRM_DB_PORT: "5432"
-      CRM_DB_NAME: crm_mock
-      CRM_DB_USER: crm_user
-      CRM_DB_PASS: crm_pass
+      VENDOR_DB_PATH: /app/store/vendor.db
     volumes:
-      - ./simulation/sources/ecommerce_api:/app
-    networks:
-      - retail-net
+      - ./simulation/sources/vendor_api:/app
     depends_on:
-      postgres_crm:
+      app_oltp:
         condition: service_healthy
+    networks:
+      - wanderfuel-net
+
+  crm_sftp:
+    image: atmoz/sftp:alpine
+    container_name: crm_sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ./simulation/sources/crm_sftp/tickets:/home/crm_vendor/tickets
+    command: ${CRM_SFTP_USER}:${CRM_SFTP_PASS}:1000:1000:tickets
+    healthcheck:
+      test: ["CMD-SHELL", "ss -tlnp | grep :22"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wanderfuel-net
+
+volumes:
+  postgres_app_data:
+
+networks:
+  wanderfuel-net:
+    driver: bridge
