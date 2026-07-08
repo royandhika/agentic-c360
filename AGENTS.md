@@ -9,7 +9,7 @@ Agent-relevant conventions, gotchas, and operational principles. Read `plan.md` 
 
 ## Repo status
 
-Greenfield: `plan.md` is the primary specification until code lands in all four subsystems (`simulation/`, `dagster_pipeline/`, `dbt/`, `streamlit_app/`). Once code exists, the code is the source of truth for *what*; `plan.md` remains the source of truth for *why*.
+Partially built: `simulation/` (Phase 1) and `dagster_pipeline/` (Phase 2) have code; `plan.md` is the specification for the remaining subsystems (`dbt/`, `streamlit_app/`). Where code exists, it is the source of truth for *what*; `plan.md` remains the source of truth for *why*.
 
 ## Two systems, don't conflate them
 
@@ -54,6 +54,8 @@ Never assume email alone is sufficient for identity. The same human routinely us
 - Never write intermediate local files during Dagster landing — write Parquet straight to MinIO from memory.
 - Daily volume target: 0–5,000 rows/day (total across all three sources, random per-day split). Pandas-in-memory + ClickHouse are comfortable in this range.
 - Keep money in IDR end-to-end; never silently convert to USD/EUR anywhere in the pipeline. Loyalty tiers are IDR-banded (e.g. Gold ≥ Rp 10jt LTV, Silver Rp 2–10 jt, Churn-Risk < Rp 2 jt or dormant > 90 days).
+- ALL credentials, secrets, API keys, and passwords MUST live in `.env`. Never hardcode any credential anywhere in the codebase.
+- MinIO and ClickHouse credentials are in `.env`; the pipeline containers read them at runtime via environment variables.
 
 ## Common commands (once code exists — verify before trusting)
 
@@ -61,10 +63,13 @@ Never assume email alone is sufficient for identity. The same human routinely us
 - Generate one travel day: `python simulation/scripts/run_day.py --date YYYY-MM-DD`
 - Wipe simulation state + generated artifacts: `simulation/scripts/reset.sh`
 - Infra up: `docker compose up -d`
+- Build Dagster image: `make pipeline-build`
+- Start pipeline infra: `make pipeline-up`
+- Stop pipeline infra: `make pipeline-down`
 
 ## Infra topology (docker-compose, local)
 
-MinIO, ClickHouse, Postgres (for app OLTP), Dagster daemon/webserver, plus the FastAPI mock vendor API.
+MinIO (bronze Parquet landing), ClickHouse (warehouse), Postgres (app OLTP), Dagster daemon + webserver, plus the FastAPI mock vendor API.
 
 ## Where things live
 
