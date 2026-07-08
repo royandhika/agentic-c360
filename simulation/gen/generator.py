@@ -2,28 +2,40 @@ import os
 import sys
 import random
 import json
-import csv
 import hashlib
 import sqlite3
+import io
 
 import yaml
+import paramiko
 import psycopg2
 from faker import Faker
 
 _PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROJ = os.path.dirname(_PARENT)
-sys.path.insert(0, os.path.join(_PARENT, 'src'))
+sys.path.insert(0, os.path.join(_PARENT, 'lib'))
 sys.path.insert(0, _PARENT)
 from world.world import WorldState
-from src.id_locales import (
-    PROVINCES, CITIES, PAYMENT_METHODS, HOLIDAYS_SEASONAL,
+from lib.id_locales import (
+    PROVINCES, INDONESIAN_CITIES, POSTAL_PREFIXES,
     PHONE_MOBILE_PREFIXES, LANDLINE_AREA_CODES, ID_MONTH_ABBR,
-    STORE_NAME_PREFIXES,
+    HOTEL_NAMES, AIRLINES, AIRPORTS, DOMESTIC_ROUTES,
+    INTERNATIONAL_ROUTES, EXPERIENCE_CATALOG, CATEGORIES,
+    ROOM_TYPES, ROOM_TYPE_MULTIPLIERS,
+    PAYMENT_METHODS_HOTEL, PAYMENT_METHODS_FLIGHT,
+    PAYMENT_METHODS_EXPERIENCE, PAYMENT_METHODS_ALL,
+    SEAT_CLASSES, SEAT_CLASS_WEIGHTS, SEAT_CLASS_MULTIPLIERS,
+    LOYALTY_TIERS, LOYALTY_TIER_WEIGHTS,
+    CRM_TICKET_CATEGORIES, CRM_TICKET_CATEGORY_WEIGHTS,
+    CRM_TICKET_SUBJECTS, CRM_TICKET_BODIES, CRM_AGENT_NAMES,
+    TOURIST_CITIES, TOURIST_CITY_WEIGHTS,
+    HOTEL_BOOKING_STATUSES, FLIGHT_BOOKING_STATUSES,
+    EXPERIENCE_BOOKING_STATUSES,
+    weighted_choice,
 )
 
 
 def _idr_fmt(val):
-    """Format integer as Indonesian dot-thousands: 1500000 -> '1.500.000'."""
     s = str(val)
     parts = []
     while len(s) > 3:
@@ -33,15 +45,13 @@ def _idr_fmt(val):
     return '.'.join(parts)
 
 
+def _date_ymd_no_sep(date_str):
+    return date_str.replace('-', '')
+
+
 def _date_dmy(date_str):
-    """Convert YYYY-MM-DD to DD/MM/YYYY."""
     y, m, d = date_str.split('-')
     return f"{d}/{m}/{y}"
-
-
-def _date_ymd_no_sep(date_str):
-    """Convert YYYY-MM-DD to YYYYMMDD."""
-    return date_str.replace('-', '')
 
 
 class DailyGenerator:
@@ -53,24 +63,126 @@ class DailyGenerator:
         self.world.seed_data()
         self.rng = random.Random(config['seed'])
         self.fake = Faker(['id_ID'])
-        self.ecom_db_path = os.path.join(_PROJ, config['ecom_db_path'])
-        self.pos_csv_dir = os.path.join(_PROJ, config['pos_csv_dir'])
 
-        os.makedirs(self.pos_csv_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(self.ecom_db_path), exist_ok=True)
-
-        crm_cfg = config['crm_db']
-        self.crm_conn = psycopg2.connect(
-            host=crm_cfg['host'],
-            port=crm_cfg['port'],
-            dbname=crm_cfg['db_name'],
-            user=crm_cfg['user'],
-            password=crm_cfg['password'],
+        pg_cfg = config.get('app_pg', {})
+        pg_host = os.getenv('POSTGRES_APP_HOST', pg_cfg.get('host', 'localhost'))
+        pg_port = int(os.getenv('POSTGRES_APP_PORT', pg_cfg.get('port', 5432)))
+        pg_dbname = os.getenv('POSTGRES_APP_DB', pg_cfg.get('dbname', 'app_oltp'))
+        pg_user = os.getenv('POSTGRES_APP_USER', pg_cfg.get('user', 'app_user'))
+        pg_password = os.getenv('POSTGRES_APP_PASS', pg_cfg.get('password', 'app_pass'))
+        self.pg_conn = psycopg2.connect(
+            host=pg_host,
+            port=pg_port,
+            dbname=pg_dbname,
+            user=pg_user,
+            password=pg_password,
         )
-        self.crm_conn.autocommit = False
+        self.pg_conn.autocommit = False
+        self._pg_initialized = False
 
-        self._ecom_db_initialized = False
-        self._crm_initialized = False
+        vendor_db_path = os.path.join(_PROJ, config['vendor_db_path'])
+        os.makedirs(os.path.dirname(vendor_db_path), exist_ok=True)
+        self.vendor_conn = sqlite3.connect(vendor_db_path)
+        self.vendor_conn.row_factory = sqlite3.Row
+        self._vendor_db_initialized = False
+
+        sftp_cfg = config.get('crm_sftp', {})
+        self.sftp_host = os.getenv('CRM_SFTP_HOST', sftp_cfg.get('host', 'localhost'))
+        self.sftp_port = int(os.getenv('CRM_SFTP_PORT', sftp_cfg.get('port', 2222)))
+        self.sftp_user = os.getenv('CRM_SFTP_USER', sftp_cfg.get('user', 'crm_vendor'))
+        self.sftp_password = os.getenv('CRM_SFTP_PASS', sftp_cfg.get('password', 'crm_pass'))
+        self.sftp_path = os.getenv('CRM_SFTP_PATH', sftp_cfg.get('path', 'tickets'))
+
+        self._customer_counters = {}
+        self._booking_counters = {}
+
+    def _next_customer_id(self, date_str, prefix="CST"):
+        key = f"{prefix}-{date_str}"
+        self._customer_counters[key] = self._customer_counters.get(key, 0) + 1
+        return f"{prefix}-{_date_ymd_no_sep(date_str)}-{self._customer_counters[key]:06d}"
+
+    def _next_booking_id(self, date_str, prefix):
+        key = f"{prefix}-{date_str}"
+        self._booking_counters[key] = self._booking_counters.get(key, 0) + 1
+        return f"{prefix}-{_date_ymd_no_sep(date_str)}-{self._booking_counters[key]:06d}"
+
+    def _init_pg(self):
+        if self._pg_initialized:
+            return
+        cur = self.pg_conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS customers (
+                customer_id TEXT PRIMARY KEY,
+                email TEXT UNIQUE,
+                phone TEXT UNIQUE,
+                full_name TEXT,
+                address TEXT,
+                city TEXT,
+                province TEXT,
+                postal_code TEXT,
+                loyalty_tier TEXT DEFAULT NULL,
+                preferred_airline TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hotel_bookings (
+                booking_id TEXT PRIMARY KEY,
+                customer_id TEXT,
+                hotel_name TEXT,
+                hotel_city TEXT,
+                check_in_date DATE,
+                check_out_date DATE,
+                room_type TEXT,
+                guests INTEGER,
+                amount_idr BIGINT,
+                payment_method TEXT,
+                booking_status TEXT,
+                booking_ts TIMESTAMP
+            )
+        """)
+        self.pg_conn.commit()
+        self._pg_initialized = True
+
+    def _init_vendor_db(self):
+        if self._vendor_db_initialized:
+            return
+        self.vendor_conn.execute("""
+            CREATE TABLE IF NOT EXISTS flight_bookings (
+                booking_ref TEXT PRIMARY KEY,
+                email TEXT,
+                airline TEXT,
+                flight_number TEXT,
+                origin TEXT,
+                destination TEXT,
+                departure_ts TEXT,
+                arrival_ts TEXT,
+                passenger_name TEXT,
+                seat_class TEXT,
+                amount_idr BIGINT,
+                payment_method TEXT,
+                booking_status TEXT,
+                booking_ts TEXT
+            )
+        """)
+        self.vendor_conn.execute("""
+            CREATE TABLE IF NOT EXISTS experience_bookings (
+                booking_ref TEXT PRIMARY KEY,
+                email TEXT,
+                experience_name TEXT,
+                city TEXT,
+                category TEXT,
+                activity_date TEXT,
+                participants INTEGER,
+                amount_idr BIGINT,
+                payment_method TEXT,
+                booking_status TEXT,
+                booking_ts TEXT
+            )
+        """)
+        self.vendor_conn.commit()
+        self._vendor_db_initialized = True
 
     # ── public API ──────────────────────────────────────────────
 
@@ -82,374 +194,64 @@ class DailyGenerator:
         self.rng.seed(seed)
         self.fake.seed_instance(seed)
 
-        volume = self.rng.randint(
-            self.config['daily_volume_min'],
-            self.config['daily_volume_max'],
-        )
+        self._init_pg()
+        self._init_vendor_db()
+
+        hotel_cap = self.config['hotel_cap']
+        flight_cap = self.config['flight_cap']
+        experience_cap = self.config['experience_cap']
+        crm_cap = self.config['crm_cap']
 
         if holiday_mode:
-            ecom_count = self.config['ecom_cap']
-            pos_count = self.config['pos_cap']
-            crm_count = self.config['crm_cap']
+            hotel_count = hotel_cap
+            flight_count = flight_cap
+            experience_count = experience_cap
+            crm_count = crm_cap
         else:
+            volume = self.rng.randint(
+                self.config['daily_volume_min'],
+                self.config['daily_volume_max'],
+            )
             remaining = volume
-            ecom_count = self.rng.randint(0, min(remaining, self.config['ecom_cap']))
-            remaining -= ecom_count
-            pos_count = self.rng.randint(0, min(remaining, self.config['pos_cap']))
-            remaining -= pos_count
-            crm_count = self.rng.randint(0, min(remaining, self.config['crm_cap']))
+            hotel_count = self.rng.randint(0, min(remaining, hotel_cap))
+            remaining -= hotel_count
+            flight_count = self.rng.randint(0, min(remaining, flight_cap))
+            remaining -= flight_count
+            experience_count = self.rng.randint(0, min(remaining, experience_cap))
+            remaining -= experience_count
+            crm_count = self.rng.randint(0, min(remaining, crm_cap))
 
-        self._generate_ecom_orders(date_str, ecom_count)
-        self._generate_pos_transactions(date_str, pos_count)
-        self._generate_crm_data(date_str, crm_count)
+        self._generate_hotel_bookings(date_str, hotel_count)
+        self._generate_flight_bookings(date_str, flight_count)
+        self._generate_experience_bookings(date_str, experience_count)
+        self._generate_crm_tickets(date_str, crm_count)
 
-        self.world.log_day(date_str, volume, ecom_count, pos_count, crm_count, holiday_mode)
+        total = hotel_count + flight_count + experience_count + crm_count
+        self.world.log_day(date_str, total, hotel_count, flight_count,
+                          experience_count, crm_count, holiday_mode)
 
     def close(self):
         self.world.close()
-        if hasattr(self, 'crm_conn') and self.crm_conn and not self.crm_conn.closed:
-            self.crm_conn.commit()
-            self.crm_conn.close()
+        if hasattr(self, 'pg_conn') and self.pg_conn and not self.pg_conn.closed:
+            self.pg_conn.commit()
+            self.pg_conn.close()
+        if hasattr(self, 'vendor_conn') and self.vendor_conn:
+            self.vendor_conn.commit()
+            self.vendor_conn.close()
 
-    # ── e-commerce SQLite ───────────────────────────────────────
+    # ── Hotel Bookings (App OLTP PostgreSQL) ───────────────────
 
-    def _init_ecom_db(self):
-        if self._ecom_db_initialized:
-            return
-        self.ecom_conn = sqlite3.connect(self.ecom_db_path)
-        self.ecom_conn.execute("""
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY,
-                order_ts TEXT,
-                channel TEXT,
-                status TEXT,
-                payment_method TEXT,
-                currency TEXT DEFAULT 'IDR',
-                grand_total_idr INTEGER,
-                shipping_fee_idr INTEGER,
-                discount_idr INTEGER,
-                customer_email TEXT,
-                customer_phone TEXT,
-                customer_name TEXT,
-                customer_address TEXT,
-                customer_city_prov TEXT,
-                line_items_json TEXT
-            )
-        """)
-        self.ecom_conn.commit()
-        self._ecom_db_initialized = True
-
-    def _generate_ecom_orders(self, date_str, count):
-        if count <= 0:
-            return
-        self._init_ecom_db()
-
-        rows = []
-        for i in range(count):
-            if self.rng.random() < 0.7:
-                existings = self.world.get_random_existing_customers(1, source='online')
-                if existings and len(existings) > 0:
-                    customer = existings[0]
-                else:
-                    customer = self.world.get_or_create_customer(source='ecom')
-            else:
-                customer = self.world.get_or_create_customer(source='ecom')
-
-            email = customer.get('email') or ''
-            if not email.strip():
-                email = self.fake.email()
-                email = self._mess_up_email(email) if self.rng.random() < self.config['error_rate'] else email
-
-            phone = customer.get('phone') or self.fake.phone_number()
-            if self.rng.random() < self.config['error_rate']:
-                phone = self._mess_up_phone(phone)
-
-            name = customer.get('name') or self.fake.name()
-            if self.rng.random() < self.config['error_rate']:
-                name = self._mess_up_name(name)
-
-            address = customer.get('address') or self.fake.address()
-            city_prov = customer.get('city_prov') or self.fake.city()
-
-            order_id = "ORD-{}-{:06d}".format(_date_ymd_no_sep(date_str), i)
-            h, m, s = self.rng.randint(6, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
-            order_ts = "{}T{:02d}:{:02d}:{:02d}+07:00".format(date_str, h, m, s)
-            channel = self.rng.choice(['web', 'android', 'ios', 'marketplace'])
-            status = self.rng.choices(
-                ['paid', 'shipped', 'delivered', 'cancelled', 'refunded'],
-                weights=[0.1, 0.25, 0.55, 0.05, 0.05],
-            )[0]
-            payment_method = self.rng.choice([
-                'QRIS', 'GoPay', 'OVO', 'DANA', 'ShopeePay', 'LinkAja',
-                'BCA', 'Mandiri', 'BNI', 'BRI', 'COD',
-            ])
-
-            n_items = self.rng.randint(1, 4)
-            products = self.world.get_random_products(n_items)
-            line_items = []
-            line_sum = 0
-            for prod in products:
-                qty = self.rng.randint(1, 5)
-                unit_price = self._random_idr_amount(prod['base_price_idr'])
-                line_items.append({
-                    'sku': prod['ecom_sku'] if prod.get('ecom_sku') and prod['ecom_sku'] != prod['sku'] else prod['sku'],
-                    'name': prod['name'],
-                    'qty': qty,
-                    'unit_price_idr': unit_price,
-                })
-                line_sum += qty * unit_price
-
-            shipping_options = [0, 0, 0, 0, 10000, 15000, 25000, 35000, 50000]
-            shipping_fee = self.rng.choice(shipping_options)
-            discount = 0 if self.rng.random() < 0.85 else self.rng.randint(5000, 50000)
-            grand_total = line_sum + shipping_fee - discount
-
-            if self.rng.random() < 0.001:
-                grand_total += self.rng.choice([-100, 100, -50, 50])
-
-            if not email.strip():
-                email = 'unknown@unknown.com'
-
-            rows.append((
-                order_id, order_ts, channel, status, payment_method, 'IDR',
-                max(0, int(grand_total)), shipping_fee, discount,
-                email, phone, name, address, city_prov,
-                json.dumps(line_items, ensure_ascii=False),
-            ))
-
-        cur = self.ecom_conn.cursor()
-        cur.executemany("""
-            INSERT OR REPLACE INTO orders
-            (order_id, order_ts, channel, status, payment_method, currency,
-             grand_total_idr, shipping_fee_idr, discount_idr,
-             customer_email, customer_phone, customer_name,
-             customer_address, customer_city_prov, line_items_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, rows)
-        self.ecom_conn.commit()
-
-    # ── POS CSV ─────────────────────────────────────────────────
-
-    def _build_pos_columns(self):
-        drift = int(self.config.get('drift_year', 2024))
-        base = ['receipt_no', 'txn_date', 'txn_time']
-
-        if drift >= 2023:
-            base.extend(['store_id'])
-        base.append('store_name')
-
-        if drift >= 2023:
-            base.extend(['kasir_id'])
-        base.extend(['customer_phone', 'customer_name', 'customer_address'])
-
-        base.extend(['product_code', 'product_name', 'qty',
-                      'unit_price_idr', 'line_total_idr', 'payment_method'])
-
-        if drift >= 2024:
-            base.extend(['cashier_shift', 'void_flag'])
-
-        return base
-
-    def _generate_pos_transactions(self, date_str, count):
-        if count <= 0:
-            return
-
-        cols = self._build_pos_columns()
-        date_dmy = _date_dmy(date_str)
-        rows = []
-
-        pos_txn_count = count
-
-        for txn_i in range(pos_txn_count):
-            store = self.world.get_random_store()
-            store_id = store['store_id']
-            store_name = store['store_name']
-
-            if self.rng.random() < 0.5:
-                existings = self.world.get_random_existing_customers(1, source='pos')
-                if existings and len(existings) > 0:
-                    customer = existings[0]
-                else:
-                    customer = self.world.get_or_create_customer(source='pos')
-            else:
-                customer = self.world.get_or_create_customer(source='pos')
-
-            receipt_no = "REC-{}-{}".format(store_id, self.rng.randint(1000000, 9999999))
-            h, m, s = self.rng.randint(6, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
-            txn_time = "{:02d}:{:02d}:{:02d}".format(h, m, s)
-
-            phone = customer.get('phone') or self.fake.phone_number()
-            name = customer.get('name') or self.fake.name()
-            address = customer.get('address') or ''
-            if not address.strip():
-                address = self.fake.address()
-
-            if self.rng.random() < self.config['error_rate']:
-                phone = self._mess_up_phone(phone)
-            if self.rng.random() < self.config['error_rate']:
-                name = self._mess_up_name(name)
-
-            payment_method = self.rng.choices(
-                ['Cash', 'QRIS', 'Debit BCA', 'Kredit Mandiri', 'GoPay',
-                 'DANA', 'ShopeePay', 'OVO'],
-                weights=[0.50, 0.20, 0.10, 0.05, 0.05, 0.04, 0.03, 0.03],
-            )[0]
-
-            cashier_shift = self.rng.choice(['Pagi', 'Siang', 'Malam'])
-            void_roll = self.rng.random()
-            if void_roll < 0.95:
-                void_flag = 'N'
-            elif void_roll < 0.99:
-                void_flag = 'TIDAK ADA'
-            else:
-                void_flag = 'Y'
-
-            n_items = self.rng.randint(1, 3)
-            products = self.world.get_random_products(n_items)
-            for prod in products:
-                qty = self.rng.randint(1, 5)
-                unit_price = self._random_idr_amount(prod['base_price_idr'])
-                line_total = qty * unit_price
-
-                if self.rng.random() < 0.001:
-                    line_total += self.rng.choice([-100, -50, 50, 100])
-
-                unit_price_str = str(unit_price)
-                line_total_str = str(max(0, line_total))
-                if self.rng.random() < self.config['error_rate']:
-                    variant = self.rng.random()
-                    if variant < 0.3:
-                        unit_price_str = "Rp " + _idr_fmt(int(unit_price))
-                        line_total_str = "Rp " + _idr_fmt(int(max(0, line_total)))
-                    elif variant < 0.5:
-                        unit_price_str = "{},00".format(_idr_fmt(int(unit_price)))
-                        line_total_str = "{},00".format(_idr_fmt(int(max(0, line_total))))
-
-                row = {
-                    'receipt_no': receipt_no,
-                    'txn_date': date_dmy,
-                    'txn_time': txn_time,
-                    'store_id': store_id,
-                    'store_name': store_name,
-                    'kasir_id': '',
-                    'customer_phone': phone,
-                    'customer_name': name,
-                    'customer_address': address,
-                    'product_code': prod['sku'],
-                    'product_name': prod['name'],
-                    'qty': qty,
-                    'unit_price_idr': unit_price_str,
-                    'line_total_idr': line_total_str,
-                    'payment_method': payment_method,
-                    'cashier_shift': cashier_shift,
-                    'void_flag': void_flag,
-                }
-
-                if self.rng.random() < self.config['error_rate']:
-                    sentinel_types = ['TIDAK ADA', 'N/A', '000-000-0000', '']
-                    target_field = self.rng.choice(
-                        ['customer_phone', 'customer_name', 'customer_address', 'product_name']
-                    )
-                    row[target_field] = self.rng.choice(sentinel_types)
-                    if target_field == 'customer_phone':
-                        phone = row['customer_phone']
-                    if target_field == 'customer_name':
-                        name = row['customer_name']
-
-                rows.append(row)
-
-                if self.rng.random() < self.config['dupe_rate']:
-                    dupe = dict(row)
-                    dupe['line_total_idr'] = str(max(0, int(line_total) + self.rng.choice(
-                        [-100, -50, -30, -10, -1, 1, 10, 30, 50, 100]
-                    )))
-                    rows.append(dupe)
-
-        csv_path = os.path.join(self.pos_csv_dir,
-                                "sales_{}.csv".format(_date_ymd_no_sep(date_str)))
-
-        with open(csv_path, 'w', encoding='iso-8859-1', newline='') as f:
-            header = cols
-            header_line = ','.join(header) + '\n'
-            f.write(header_line)
-
-            for row_dict in rows:
-                vals = [str(row_dict.get(c, '')) for c in cols]
-
-                inject_comma = self.rng.random() < 0.005
-                if inject_comma and 'customer_address' in cols:
-                    addr_idx = cols.index('customer_address')
-                    orig = vals[addr_idx]
-                    if ',' not in orig and len(orig) > 10:
-                        vals[addr_idx] = orig.replace(' ', ', ', 2)
-
-                    safe = all(',' not in str(v) for v in vals)
-                    if safe or inject_comma:
-                        f.write(','.join(str(v) for v in vals) + '\n')
-                        continue
-
-                writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-                writer.writerow(vals)
-
-    # ── CRM Postgres ────────────────────────────────────────────
-
-    def _init_crm(self):
-        if self._crm_initialized:
-            return
-        cur = self.crm_conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS customers (
-                customer_id BIGSERIAL PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE,
-                phone TEXT,
-                full_name TEXT,
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW(),
-                preferred_contact TEXT DEFAULT 'email',
-                lifetime_value_idr BIGINT DEFAULT 0,
-                address TEXT,
-                city_prov TEXT,
-                is_vip BOOLEAN DEFAULT FALSE
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tickets (
-                ticket_id BIGSERIAL PRIMARY KEY,
-                customer_id BIGINT REFERENCES customers(customer_id),
-                subject TEXT,
-                body TEXT,
-                status TEXT DEFAULT 'open',
-                priority TEXT DEFAULT 'normal',
-                channel TEXT DEFAULT 'email',
-                created_at TIMESTAMP DEFAULT NOW(),
-                resolved_at TIMESTAMP,
-                resolution_note TEXT,
-                category TEXT DEFAULT 'other',
-                contact_email_snapshot TEXT
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS interactions (
-                interaction_id BIGSERIAL PRIMARY KEY,
-                ticket_id BIGINT REFERENCES tickets(ticket_id),
-                agent_id TEXT,
-                agent_name TEXT,
-                ts TIMESTAMP DEFAULT NOW(),
-                direction TEXT,
-                channel TEXT,
-                note TEXT
-            )
-        """)
-        self.crm_conn.commit()
-        self._crm_initialized = True
-
-    def _upsert_crm_customer(self, world_customer):
-        cur = self.crm_conn.cursor()
+    def _upsert_app_customer(self, world_customer):
+        cur = self.pg_conn.cursor()
         email = world_customer.get('email') or self.fake.email()
         phone = world_customer.get('phone') or self.fake.phone_number()
-        name = world_customer.get('name') or self.fake.name()
-        address = world_customer.get('address') or self.fake.address()
-        city_prov = world_customer.get('city_prov') or self.fake.city()
+
+        name = world_customer.get('canonical_name') or self.fake.name()
+        addr = world_customer.get('address') or self.fake.address()
+        app_city = world_customer.get('city') or self.fake.city()
+        province = world_customer.get('province') or 'DKI Jakarta'
+        postal = world_customer.get('postal_code') or '10110'
+        loyalty = world_customer.get('loyalty_tier') or 'basic'
 
         cur.execute(
             "SELECT customer_id FROM customers WHERE email = %s OR phone = %s",
@@ -460,135 +262,434 @@ class DailyGenerator:
         if row:
             cid = row[0]
             cur.execute(
-                "UPDATE customers SET full_name=%s, address=%s, city_prov=%s, updated_at=NOW() WHERE customer_id=%s",
-                (name, address, city_prov, cid),
+                "UPDATE customers SET full_name = %s, email = %s, phone = %s, "
+                "address = %s, city = %s, province = %s, postal_code = %s, "
+                "loyalty_tier = %s, updated_at = NOW() WHERE customer_id = %s",
+                (name, email, phone, addr, app_city, province, postal, loyalty, cid),
             )
         else:
+            cid = f"CST-{world_customer['id']:06d}-{self.fake.random_int(100000, 999999)}"
             cur.execute(
-                "INSERT INTO customers (email, phone, full_name, address, city_prov) VALUES (%s, %s, %s, %s, %s) RETURNING customer_id",
-                (email, phone, name, address, city_prov),
+                """INSERT INTO customers
+                   (customer_id, email, phone, full_name, address, city, province,
+                    postal_code, loyalty_tier, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())""",
+                (cid, email, phone, name, addr, app_city, province, postal, loyalty),
             )
-            cid = cur.fetchone()[0]
 
-        self.crm_conn.commit()
         return cid, email, phone, name
 
-    _TICKET_SUBJECTS = [
-        "Paket belum sampai",
-        "Permintaan pengembalian dana",
-        "Barang rusak - mohon ganti rugi",
-        "Ongkir terlalu mahal",
-        "Status pesanan tidak update",
-        "Pembayaran gagal",
-        "Salah kirim produk",
-        "Akun tidak bisa login",
-        "Voucher tidak berlaku",
-    ]
-
-    _TICKET_BODIES = [
-        "Tolong dicek ya mob, udah 2 hari paketnya ga sampe",
-        "dt-05-rt-10 jalan kelapa dua no 17",
-        "Barangnya beda sama yang difoto. Saya mau refund",
-        "Sudah transfer tapi status masih pending",
-        "Kak vouchernya gabisa dipake katanya expired",
-        "Paket saya diterima sudah dalam keadaan rusak. Minta ganti rugi",
-        "Kenapa ongkirnya mahal banget? Padahal masih satu kota",
-        "Tolong bantu lacak paket saya, nomor resi katanya ga valid",
-        "Saya salah alamat waktu checkout, bisa diubah?",
-    ]
-
-    _TICKET_STATUSES = ['open', 'pending_cust', 'waiting_3rd_party', 'resolved', 'closed', 'escalated']
-
-    _INTERACTION_NOTES = [
-        "sudah dijelaskan via email",
-        "menunggu respon dari customer",
-        "produk dikirim ulang 3 Juli",
-        "customer minta nomor resi",
-        "dijadwalkan pengambilan barang besok",
-        "menunggu konfirmasi dari gudang",
-        "sudah kirim link refund",
-        "customer sudah konfirmasi terima barang",
-        "voucher sudah dikirim ulang via email",
-        "eskalasi ke supervisor",
-    ]
-
-    def _generate_crm_data(self, date_str, ticket_count):
-        if ticket_count <= 0:
+    def _generate_hotel_bookings(self, date_str, count):
+        if count <= 0:
             return
-        self._init_crm()
 
-        for _ in range(ticket_count):
-            if self.rng.random() < 0.7:
+        rows = []
+        for i in range(count):
+            is_new = self.rng.random() < 0.20
+            if is_new:
+                cust = self.world.get_or_create_customer(source='app')
+            else:
+                existings = self.world.get_random_existing_customers(1, source='app')
+                if existings and len(existings) > 0:
+                    cust = existings[0]
+                else:
+                    cust = self.world.get_or_create_customer(source='app')
+
+            customer_id, email, phone, name = self._upsert_app_customer(cust)
+
+            hotel_city = self.world.get_random_itinerary_hotel_city()
+            hotel = self.world.get_random_hotel(city=hotel_city)
+            if hotel is None:
+                hotel = self.world.get_random_hotel()
+            if hotel is None:
+                continue
+
+            hotel_name = hotel['hotel_name']
+            hotel_city_db = hotel['city']
+            base_price = hotel['base_price_per_night_idr']
+
+            room_type = self.rng.choices(
+                ROOM_TYPES,
+                weights=[30, 25, 8, 10, 5, 12, 6, 4],
+            )[0]
+
+            check_in_date = date_str
+            if self.rng.random() < 0.10:
+                from datetime import datetime, timedelta
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                offset = self.rng.choice([-3, -2, -1, 1, 2, 3, 4, 5])
+                check_in_date = (dt + timedelta(days=offset)).strftime('%Y-%m-%d')
+
+            nights = self.rng.choices(
+                [1, 2, 3, 4, 5, 7, 10],
+                weights=[0.15, 0.35, 0.25, 0.10, 0.07, 0.05, 0.03],
+            )[0]
+
+            from datetime import datetime, timedelta
+            dt_in = datetime.strptime(check_in_date, '%Y-%m-%d')
+            check_out_date = (dt_in + timedelta(days=nights)).strftime('%Y-%m-%d')
+
+            guests = self.rng.choices(
+                [1, 2, 3, 4, 5],
+                weights=[0.10, 0.60, 0.15, 0.10, 0.05],
+            )[0]
+
+            multiplier = ROOM_TYPE_MULTIPLIERS.get(room_type, 1.0)
+            amount = int(base_price * nights * multiplier)
+            amount = max(100, int(round(amount / 100.0) * 100))
+
+            payment_method = weighted_choice(PAYMENT_METHODS_HOTEL, self.rng)
+            booking_status = weighted_choice(HOTEL_BOOKING_STATUSES, self.rng)
+
+            booking_id = self._next_booking_id(date_str, "HTL")
+            h, m, s = self.rng.randint(6, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
+            booking_ts = f"{date_str} {h:02d}:{m:02d}:{s:02d}"
+
+            if self.rng.random() < self.config['error_rate']:
+                amount = self._mess_up_amount(amount)
+
+            self.world.update_lifetime_value(cust['id'], amount)
+
+            cur = self.pg_conn.cursor()
+            cur.execute("""
+                INSERT INTO hotel_bookings
+                (booking_id, customer_id, hotel_name, hotel_city, check_in_date,
+                 check_out_date, room_type, guests, amount_idr, payment_method,
+                 booking_status, booking_ts)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                booking_id, customer_id, hotel_name, hotel_city_db,
+                check_in_date, check_out_date, room_type, guests,
+                amount, payment_method, booking_status, booking_ts,
+            ))
+
+            if self.rng.random() < self.config['dupe_rate']:
+                dupe_amount = amount + self.rng.choice([-100, -50, -1, 1, 50, 100])
+                dupe_amount = max(100, dupe_amount)
+                dupe_id = self._next_booking_id(date_str, "HTL")
+                cur.execute("""
+                    INSERT INTO hotel_bookings
+                    (booking_id, customer_id, hotel_name, hotel_city, check_in_date,
+                     check_out_date, room_type, guests, amount_idr, payment_method,
+                     booking_status, booking_ts)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    dupe_id, customer_id, hotel_name, hotel_city_db,
+                    check_in_date, check_out_date, room_type, guests,
+                    dupe_amount, payment_method, booking_status, booking_ts,
+                ))
+
+        self.pg_conn.commit()
+
+    # ── Flight Bookings (Vendor API SQLite) ────────────────────
+
+    def _generate_flight_bookings(self, date_str, count):
+        if count <= 0:
+            return
+
+        rows = []
+        for i in range(count):
+            is_new = self.rng.random() < 0.40
+            if is_new:
+                cust = self.world.get_or_create_customer(source='vendor')
+            else:
+                existings = self.world.get_random_existing_customers(1, source='vendor')
+                if existings and len(existings) > 0:
+                    cust = existings[0]
+                else:
+                    cust = self.world.get_or_create_customer(source='vendor')
+
+            is_domestic = self.rng.random() < 0.70
+            origin_iata, dest_iata, typical_fare = self.world.get_random_route(domestic=is_domestic)
+            airline = self.world.get_random_airline(domestic=is_domestic)
+
+            flight_number = f"{airline['iata_code']}{self.rng.randint(100, 999)}"
+
+            seat_class = weighted_choice(SEAT_CLASS_WEIGHTS, self.rng)
+            seat_mult = SEAT_CLASS_MULTIPLIERS.get(seat_class, 1.0)
+
+            fare = int(typical_fare * seat_mult)
+            if is_domestic:
+                fare += int(fare * 0.10)
+            else:
+                fare += int(fare * 0.15)
+            fare = max(10000, int(round(fare / 100.0) * 100))
+
+            email = cust.get('email') or self.fake.email()
+            if self.rng.random() < self.config['error_rate']:
+                email = self._mess_up_email(email)
+
+            passenger_name = cust.get('canonical_name') or self.fake.name()
+            if self.rng.random() < self.config['error_rate']:
+                passenger_name = self._mess_up_name(passenger_name)
+
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            dep_offset_hours = self.rng.randint(0, 23)
+            departure_ts = (dt + timedelta(hours=dep_offset_hours,
+                                           minutes=self.rng.randint(0, 59))).strftime('%Y-%m-%dT%H:%M:%S+07:00')
+            flight_duration_minutes = self.rng.randint(60, 480) if is_domestic else self.rng.randint(120, 720)
+            arrival_dt = datetime.strptime(departure_ts[:19], '%Y-%m-%dT%H:%M:%S') + timedelta(minutes=flight_duration_minutes)
+            arrival_ts = arrival_dt.strftime('%Y-%m-%dT%H:%M:%S+07:00')
+
+            payment_method = weighted_choice(PAYMENT_METHODS_FLIGHT, self.rng)
+            booking_status = weighted_choice(FLIGHT_BOOKING_STATUSES, self.rng)
+
+            booking_ref = self._next_booking_id(date_str, "FLT")
+            h, m, s = self.rng.randint(0, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
+            booking_ts = f"{date_str}T{h:02d}:{m:02d}:{s:02d}+07:00"
+
+            if self.rng.random() < self.config['error_rate']:
+                fare = self._mess_up_amount(fare)
+
+            self.world.update_lifetime_value(cust['id'], fare)
+
+            cur = self.vendor_conn.cursor()
+            cur.execute("""
+                INSERT INTO flight_bookings
+                (booking_ref, email, airline, flight_number, origin, destination,
+                 departure_ts, arrival_ts, passenger_name, seat_class,
+                 amount_idr, payment_method, booking_status, booking_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                booking_ref, email, airline['airline_name'], flight_number,
+                origin_iata, dest_iata, departure_ts, arrival_ts,
+                passenger_name, seat_class, fare, payment_method,
+                booking_status, booking_ts,
+            ))
+
+            if self.rng.random() < self.config['dupe_rate']:
+                dupe_fare = fare + self.rng.choice([-100, -50, -1, 1, 50, 100])
+                dupe_ref = self._next_booking_id(date_str, "FLT")
+                cur.execute("""
+                    INSERT INTO flight_bookings
+                    (booking_ref, email, airline, flight_number, origin, destination,
+                     departure_ts, arrival_ts, passenger_name, seat_class,
+                     amount_idr, payment_method, booking_status, booking_ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dupe_ref, email, airline['airline_name'], flight_number,
+                    origin_iata, dest_iata, departure_ts, arrival_ts,
+                    passenger_name, seat_class, max(100, dupe_fare),
+                    payment_method, booking_status, booking_ts,
+                ))
+
+        self.vendor_conn.commit()
+
+    # ── Experience Bookings (Vendor API SQLite) ────────────────
+
+    def _generate_experience_bookings(self, date_str, count):
+        if count <= 0:
+            return
+
+        for i in range(count):
+            is_new = self.rng.random() < 0.20
+            if is_new:
+                cust = self.world.get_or_create_customer(source='vendor')
+            else:
+                existings = self.world.get_random_existing_customers(1, source='vendor')
+                if existings and len(existings) > 0:
+                    cust = existings[0]
+                else:
+                    cust = self.world.get_or_create_customer(source='vendor')
+
+            hotel_city = self.world.get_random_itinerary_hotel_city()
+            exp = self.world.get_random_experience(city=hotel_city)
+            if exp is None:
+                exp = self.world.get_random_experience()
+            if exp is None:
+                continue
+
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            activity_offset = self.rng.randint(1, 7)
+            activity_date = (dt + timedelta(days=activity_offset)).strftime('%Y-%m-%d')
+
+            participants = self.rng.choices(
+                [1, 2, 3, 4],
+                weights=[0.20, 0.50, 0.15, 0.15],
+            )[0]
+
+            base_price = exp['base_price_per_person_idr']
+            amount = base_price * participants
+            amount = max(1000, int(round(amount / 100.0) * 100))
+
+            email = cust.get('email') or self.fake.email()
+            if self.rng.random() < self.config['error_rate']:
+                email = self._mess_up_email(email)
+
+            payment_method = weighted_choice(PAYMENT_METHODS_EXPERIENCE, self.rng)
+            booking_status = weighted_choice(EXPERIENCE_BOOKING_STATUSES, self.rng)
+
+            booking_ref = self._next_booking_id(date_str, "EXP")
+            h, m, s = self.rng.randint(0, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
+            booking_ts = f"{date_str}T{h:02d}:{m:02d}:{s:02d}+07:00"
+
+            if self.rng.random() < self.config['error_rate']:
+                amount = self._mess_up_amount(amount)
+
+            self.world.update_lifetime_value(cust['id'], amount)
+
+            cur = self.vendor_conn.cursor()
+            cur.execute("""
+                INSERT INTO experience_bookings
+                (booking_ref, email, experience_name, city, category,
+                 activity_date, participants, amount_idr, payment_method,
+                 booking_status, booking_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                booking_ref, email, exp['experience_name'], exp['city'],
+                exp['category'], activity_date, participants, amount,
+                payment_method, booking_status, booking_ts,
+            ))
+
+            if self.rng.random() < self.config['dupe_rate']:
+                dupe_amount = amount + self.rng.choice([-100, -50, -1, 1, 50, 100])
+                dupe_ref = self._next_booking_id(date_str, "EXP")
+                cur.execute("""
+                    INSERT INTO experience_bookings
+                    (booking_ref, email, experience_name, city, category,
+                     activity_date, participants, amount_idr, payment_method,
+                     booking_status, booking_ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dupe_ref, email, exp['experience_name'], exp['city'],
+                    exp['category'], activity_date, participants,
+                    max(1000, dupe_amount), payment_method,
+                    booking_status, booking_ts,
+                ))
+
+        self.vendor_conn.commit()
+
+    # ── CRM Tickets (SFTP upload) ───────────────────────────────
+
+    def _generate_crm_tickets(self, date_str, count):
+        if count <= 0:
+            return
+
+        tickets = []
+        for i in range(count):
+            is_new = self.rng.random() < 0.70
+            if is_new:
                 existings = self.world.get_random_existing_customers(1, source='crm')
                 if existings and len(existings) > 0:
-                    customer = existings[0]
+                    cust = existings[0]
                 else:
-                    customer = self.world.get_or_create_customer(source='crm')
+                    cust = self.world.get_or_create_customer(source='crm')
             else:
-                customer = self.world.get_or_create_customer(source='crm')
+                cust = self.world.get_or_create_customer(source='crm')
 
-            cid, c_email, c_phone, c_name = self._upsert_crm_customer(customer)
+            email = cust.get('email') or self.fake.email()
+            if self.rng.random() < 0.15 and cust.get('alternate_email') and cust['alternate_email'].strip():
+                email = cust['alternate_email']
+            elif self.rng.random() < 0.10:
+                email = self.fake.email()
 
-            subject = self.rng.choice(self._TICKET_SUBJECTS)
-            body = self.rng.choice(self._TICKET_BODIES)
-            t_status = self.rng.choices(self._TICKET_STATUSES,
-                                        weights=[0.3, 0.2, 0.1, 0.25, 0.1, 0.05])[0]
+            phone = cust.get('phone') or self.fake.phone_number()
+            use_alt_phone = self.rng.random() < 0.10 and cust.get('alternate_phone') and cust['alternate_phone'].strip()
+            if use_alt_phone:
+                phone = cust['alternate_phone']
+
+            customer_name = cust.get('canonical_name') or self.fake.name()
+            if self.rng.random() < self.config['error_rate']:
+                customer_name = self._mess_up_name(customer_name)
+
+            if self.rng.random() < self.config['error_rate']:
+                email = self._mess_up_email(email)
+            if self.rng.random() < self.config['error_rate']:
+                phone = self._mess_up_phone(phone)
+
+            category = weighted_choice(CRM_TICKET_CATEGORY_WEIGHTS, self.rng)
+
+            subject = self.rng.choice(CRM_TICKET_SUBJECTS)
+            body_template = self.rng.choice(CRM_TICKET_BODIES)
+
+            body = self._fill_ticket_body(body_template, cust, date_str)
+
+            status = self.rng.choices(
+                ['open', 'in_progress', 'resolved', 'closed'],
+                weights=[0.40, 0.30, 0.20, 0.10],
+            )[0]
             priority = self.rng.choices(
-                ['normal', 'high', 'low', 'urgent'],
-                weights=[0.70, 0.20, 0.05, 0.05],
+                ['low', 'medium', 'high', 'critical'],
+                weights=[0.20, 0.50, 0.25, 0.05],
             )[0]
             channel = self.rng.choices(
-                ['email', 'whatsapp', 'phone', 'web_form', 'instagram', 'twitter'],
-                weights=[0.40, 0.30, 0.20, 0.05, 0.03, 0.02],
-            )[0]
-            category = self.rng.choices(
-                ['shipping', 'refund', 'product_quality', 'payment', 'account', 'other'],
-                weights=[0.30, 0.20, 0.15, 0.15, 0.10, 0.10],
+                ['email', 'phone', 'whatsapp', 'app_chat'],
+                weights=[0.60, 0.25, 0.10, 0.05],
             )[0]
 
-            snapshot = c_email
-            if self.rng.random() < 0.15:
-                if customer.get('alternate_email') and customer['alternate_email'].strip():
-                    snapshot = customer['alternate_email']
-                else:
-                    snapshot = self.fake.email()
+            from datetime import datetime, timedelta
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            h, m, s = self.rng.randint(6, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
+            created_at = f"{date_str}T{h:02d}:{m:02d}:{s:02d}+07:00"
 
-            cur = self.crm_conn.cursor()
-            h, m, s = self.rng.randint(8, 21), self.rng.randint(0, 59), self.rng.randint(0, 59)
-            created_ts = "{} {:02d}:{:02d}:{:02d}".format(date_str, h, m, s)
+            resolved_at = None
+            if status in ('resolved', 'closed'):
+                resolve_offset = self.rng.randint(1, 72)
+                resolved_dt = datetime.strptime(created_at[:19], '%Y-%m-%dT%H:%M:%S') + timedelta(hours=resolve_offset)
+                resolved_at = resolved_dt.strftime('%Y-%m-%dT%H:%M:%S+07:00')
 
-            cur.execute("""
-                INSERT INTO tickets
-                (customer_id, subject, body, status, priority, channel,
-                 created_at, category, contact_email_snapshot)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING ticket_id
-            """, (cid, subject, body, t_status, priority, channel,
-                  created_ts, category, snapshot))
-            ticket_id = cur.fetchone()[0]
-            self.crm_conn.commit()
+            agent_name = self.rng.choice(CRM_AGENT_NAMES)
+            ticket_id = self._next_booking_id(date_str, "TKT")
 
-            n_interactions = self.rng.randint(1, 3)
-            for ix in range(n_interactions):
-                direction = 'inbound' if ix == 0 else 'outbound'
-                if ix > 0 and self.rng.random() < 0.3:
-                    direction = 'inbound'
-                agent_name = self.fake.name()
-                agent_id = "AGT-{:04d}".format(self.rng.randint(1, 9999))
-                note = self.rng.choice(self._INTERACTION_NOTES)
+            ticket = {
+                "ticket_id": ticket_id,
+                "customer_email": email,
+                "customer_phone": phone,
+                "customer_name": customer_name,
+                "subject": subject,
+                "body": body,
+                "status": status,
+                "priority": priority,
+                "channel": channel,
+                "created_at": created_at,
+                "resolved_at": resolved_at,
+                "category": category,
+                "agent_name": agent_name,
+            }
+            tickets.append(ticket)
 
-                h2, m2, s2 = self.rng.randint(0, 23), self.rng.randint(0, 59), self.rng.randint(0, 59)
-                int_ts = "{} {:02d}:{:02d}:{:02d}".format(date_str, h2, m2, s2)
-                int_channel = channel if self.rng.random() < 0.6 else self.rng.choice(
-                    ['email', 'whatsapp', 'phone', 'chat']
-                )
+        payload = json.dumps(tickets, ensure_ascii=False, indent=2)
+        filename = f"tickets_{_date_ymd_no_sep(date_str)}.json"
 
-                cur.execute("""
-                    INSERT INTO interactions
-                    (ticket_id, agent_id, agent_name, ts, direction, channel, note)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (ticket_id, agent_id, agent_name, int_ts, direction, int_channel, note))
-            self.crm_conn.commit()
+        tpt = paramiko.Transport((self.sftp_host, self.sftp_port))
+        tpt.connect(username=self.sftp_user, password=self.sftp_password)
+        sftp = paramiko.SFTPClient.from_transport(tpt)
+        sftp.chdir(self.sftp_path)
+        with sftp.file(filename, 'w') as f:
+            f.write(payload)
+        sftp.close()
+        tpt.close()
+
+    def _fill_ticket_body(self, body_template, cust, date_str):
+        from datetime import datetime, timedelta
+        airline_name = self.rng.choice([a[0] for a in AIRLINES if a[3] == 1])
+        origin = self.rng.choice(DOMESTIC_ROUTES)[0]
+        destination = self.rng.choice(DOMESTIC_ROUTES)[1]
+        hotel_name = self.rng.choice([h[0] for h in HOTEL_NAMES])
+        room_type = self.rng.choice(ROOM_TYPES)
+        experience_name = self.rng.choice([e[0] for e in EXPERIENCE_CATALOG])
+        amount = self.rng.randint(150000, 5000000)
+        hours = self.rng.randint(1, 12)
+        booking_ref = f"HTL-{_date_ymd_no_sep(date_str)}-{self.rng.randint(1000, 9999):06d}"
+        old_date_dt = datetime.strptime(date_str, '%Y-%m-%d') - timedelta(days=self.rng.randint(1, 30))
+        old_date = old_date_dt.strftime('%Y-%m-%d')
+
+        body = body_template
+        body = body.replace("{airline}", airline_name)
+        body = body.replace("{origin}", origin)
+        body = body.replace("{destination}", destination)
+        body = body.replace("{date}", date_str)
+        body = body.replace("{hours}", str(hours))
+        body = body.replace("{hotel}", hotel_name)
+        body = body.replace("{amount_idr}", _idr_fmt(amount))
+        body = body.replace("{old_date}", old_date)
+        body = body.replace("{booking_ref}", booking_ref)
+        body = body.replace("{room_type}", room_type)
+        body = body.replace("{experience_name}", experience_name)
+
+        return body
 
     # ── messiness helpers ───────────────────────────────────────
 
@@ -600,6 +701,8 @@ class DailyGenerator:
         if roll < 0.02:
             return '000-000-0000'
         if roll < 0.04:
+            return 'TIDAK ADA'
+        if roll < 0.06:
             return ''
         if roll < 0.50:
             cleaned = phone.replace(' ', '').replace('-', '').replace('+', '')
@@ -609,15 +712,12 @@ class DailyGenerator:
                 cleaned = '0' + cleaned
             if self.rng.random() < 0.5:
                 return cleaned[:4] + '-' + cleaned[4:8] + '-' + cleaned[8:]
-            else:
-                return cleaned
+            return cleaned
         if roll < 0.75:
             cleaned = phone.replace(' ', '').replace('-', '').replace('+', '')
             if cleaned.startswith('62'):
                 cleaned = '0' + cleaned[2:]
-            if self.rng.random() < 0.5:
-                return cleaned[:4] + '-' + cleaned[4:8] + ' ' + cleaned[8:]
-            return cleaned
+            return cleaned[:4] + '-' + cleaned[4:8] + ' ' + cleaned[8:]
         if roll < 0.88:
             cleaned = phone.replace(' ', '').replace('-', '')
             if cleaned.startswith('+62'):
@@ -641,9 +741,9 @@ class DailyGenerator:
             local = local.lower()
             domain = domain.lower()
         if self.rng.random() < 0.10:
-            if 'gmail.com' in domain:
+            if 'gmail.com' in domain.lower():
                 domain = self.rng.choice(['gnail.com', 'gmaill.com', 'gmail.com'])
-            elif 'yahoo.co.id' in domain:
+            elif 'yahoo.co.id' in domain.lower():
                 domain = 'yaho.co.id'
         if self.rng.random() < 0.05:
             local = local + '+' + self.fake.word()
@@ -669,6 +769,18 @@ class DailyGenerator:
             prefix = self.rng.choice(['Bpk. ', 'Ibu ', 'Sdr. '])
             return prefix + name
         return name
+
+    def _mess_up_amount(self, amount):
+        roll = self.rng.random()
+        if roll < 0.2:
+            return amount + self.rng.choice([-100, -50, 50, 100])
+        if roll < 0.3:
+            return amount + 1
+        if roll < 0.35:
+            return amount - 1
+        if roll < 0.40:
+            return amount + self.rng.randint(10, 99)
+        return amount
 
     def _random_idr_amount(self, base_price, noise_pct=0.1):
         noise = 1.0 + self.rng.uniform(-noise_pct, noise_pct)
