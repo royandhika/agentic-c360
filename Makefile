@@ -1,10 +1,22 @@
-.PHONY: setup infra-up infra-down generate backfill reset clean
+.PHONY: help setup infra-up infra-down generate backfill reset clean
 
 -include .env
 export
 
 VENV = simulation/.venv
 MARKER = simulation/.setup-done
+
+help: ## Show this help
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  setup        Create venv and install Python dependencies"
+	@echo "  infra-up     Start mock source containers (docker compose up)"
+	@echo "  infra-down   Stop mock source containers (docker compose down)"
+	@echo "  generate     Run one simulation day (use DATE=YYYY-MM-DD, HOLIDAY=1)"
+	@echo "  backfill     Run N simulation days (use DAYS=N, BACKFILL_START=YYYY-MM-DD)"
+	@echo "  reset        Wipe simulation state and generated artifacts"
+	@echo "  clean        Remove venv, marker, and __pycache__ dirs"
 
 .env:
 	@if [ ! -f .env ]; then \
