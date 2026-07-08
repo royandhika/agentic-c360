@@ -49,9 +49,9 @@ The longer-term goal — built on top of the C360 — is an **agent-powered AI a
 
 ## Current Phase
 
-We are building the **simulation** — a standalone Python generator that creates realistic, intentionally messy Indonesian travel data across all three source systems. The simulation uses a shared world state (SQLite) to maintain consistency: the same customer appears across all three sources with the identity fragmentation patterns we'll need to resolve in the pipeline.
+The **simulation** (Phase 1) and **Landing/Bronze** pipeline (Phase 2) are complete. The simulation — a standalone Python generator — creates realistic, intentionally messy Indonesian travel data across all three source systems, using a shared world state (SQLite). The same customer appears across all three sources with the identity fragmentation patterns the pipeline resolves.
 
-The simulation is standalone. It runs on cron or via manual scripts. Dagster (coming in Phase 2) orchestrates only the landing→silver→gold→serve pipeline.
+Dagster now orchestrates the landing pipeline: five assets extract bookings from App OLTP (Postgres), Vendor API (FastAPI), and CRM SFTP (JSON) and write Parquet straight to MinIO. The simulation remains standalone (cron/scripts). Up next: Silver cleansing, Gold dimensional models, and the Streamlit C360 dashboard.
 
 ## Deliberate Messiness
 
@@ -94,12 +94,12 @@ Seasonal spikes: Lebaran (mudik travel surge), Natal dan Tahun Baru (holiday tra
 
 ## Roadmap
 
-| Phase | Milestone |
-|---|---|
-| 0 | Infrastructure — docker-compose for all services |
-| 1 | Simulation — world state, generator, 3 mock sources, backfill |
-| 2 | Landing (Bronze) — Dagster extracts to MinIO Parquet |
-| 3 | Silver — dbt cleanse: phone/email normalization, date/money, nulls, dedupe |
-| 4 | Gold — fact_bookings + dim_customer with entity resolution in ClickHouse |
-| 5 | Serving — Streamlit Customer 360 with CLV, loyalty tiers |
-| 6 | AI — LangChain query/explain/recommend layer over ClickHouse |
+| Phase | Milestone | Status |
+|---|---|---|
+| 0 | Infrastructure — docker-compose for all services | Done |
+| 1 | Simulation — world state, generator, 3 mock sources, backfill | Done |
+| 2 | Landing (Bronze) — Dagster extracts to MinIO Parquet | Done |
+| 3 | Silver — dbt cleanse: phone/email normalization, date/money, nulls, dedupe | — |
+| 4 | Gold — fact_bookings + dim_customer with entity resolution in ClickHouse | — |
+| 5 | Serving — Streamlit Customer 360 with CLV, loyalty tiers | — |
+| 6 | AI — LangChain query/explain/recommend layer over ClickHouse | — |

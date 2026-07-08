@@ -57,7 +57,7 @@ agentic-c360/
   STORY.md
   README.md
   docker-compose.yml            # Postgres (app OLTP), FastAPI vendor API
-  docker-compose.pipeline.yml   # MinIO, ClickHouse, Dagster (planned)
+  docker-compose.pipeline.yml   # MinIO, ClickHouse, Dagster
   .env.example
   Makefile
   simulation/                   # imitates real-world sources; standalone cron/script
@@ -292,15 +292,15 @@ All tiers are IDR-banded. Never convert to USD/EUR anywhere in the pipeline.
 
 ## Roadmap
 
-| Phase | Deliverable |
-|---|---|
-| 0 | Infra — docker-compose for MinIO, ClickHouse, Postgres, Dagster, vendor API. `.env.example`. |
-| 1 | Simulation — world state, Faker generator, three mock sources, backfill script. Verify a year of messy travel history can be generated and reset. |
-| 2 | Landing (Bronze) — Dagster ops extracting each source into MinIO Parquet (no local files). |
-| 3 | Silver — dbt models: phone/email standardization, date/money normalization, null/sentinel handling, dedupe. |
-| 4 | Gold — dbt `fact_bookings` + `dim_customer` with entity resolution in ClickHouse. |
-| 5 | Serving — Streamlit Customer 360; CLV + loyalty tiers (Gold / Silver / Churn-Risk). |
-| 6 | AI — LangChain agent over ClickHouse for natural-language query, anomaly explanation, proactive recommendations. |
+| Phase | Deliverable | Status |
+|---|---|---|
+| 0 | Infra — docker-compose for MinIO, ClickHouse, Postgres, Dagster, vendor API. `.env.example`. | Done |
+| 1 | Simulation — world state, Faker generator, three mock sources, backfill script. Verify a year of messy travel history can be generated and reset. | Done |
+| 2 | Landing (Bronze) — Dagster ops extracting each source into MinIO Parquet (no local files). | Done |
+| 3 | Silver — dbt models: phone/email standardization, date/money normalization, null/sentinel handling, dedupe. | — |
+| 4 | Gold — dbt `fact_bookings` + `dim_customer` with entity resolution in ClickHouse. | — |
+| 5 | Serving — Streamlit Customer 360; CLV + loyalty tiers (Gold / Silver / Churn-Risk). | — |
+| 6 | AI — LangChain agent over ClickHouse for natural-language query, anomaly explanation, proactive recommendations. | — |
 
 ## Operational Constraints
 

@@ -62,7 +62,7 @@ agentic-c360/
   README.md                       # This file
   Makefile                        # Common tasks (setup, generate, backfill, reset)
   docker-compose.yml              # Mock sources (Postgres app OLTP, vendor API)
-  docker-compose.pipeline.yml     # MinIO, ClickHouse, Dagster (planned)
+  docker-compose.pipeline.yml     # MinIO, ClickHouse, Dagster
   .env.example                    # Environment variable template
   simulation/                     # Standalone data generator (cron/script driven)
     config.yaml                   # SEED, volume, error/dupe/drift knobs
@@ -77,7 +77,7 @@ agentic-c360/
       backfill.py                 # Generate N days of travel history
       run_day.py                  # Generate one travel day
       reset.sh                    # Wipe world state + artifacts
-  dagster_pipeline/               # (planned) Land → MinIO Parquet orchestration
+  dagster_pipeline/               # Land → MinIO Parquet orchestration
   dbt/                            # (planned) Silver cleanse + Gold dims/facts
   streamlit_app/                  # (planned) Customer 360 dashboard
   ops/                            # (planned) dbt profiles, ClickHouse init SQL
@@ -92,6 +92,10 @@ agentic-c360/
 - Docker and Docker Compose
 - Python 3.11+
 - `make`
+
+### Credentials
+
+ALL credentials MUST be set in the `.env` file. No hardcoded credentials, secrets, API keys, or passwords are permitted anywhere in the codebase. See `.env.example` for required variables.
 
 ### Setup
 
@@ -119,15 +123,22 @@ make backfill DAYS=365
 make backfill DAYS=90 BACKFILL_START=2024-01-01
 ```
 
-### Planned (Not Yet Implemented)
+### Pipeline Infrastructure (Phase 2+)
 
 ```bash
-# Start pipeline infrastructure (Dagster, MinIO, ClickHouse)
-docker compose -f docker-compose.pipeline.yml up -d
+# Build Dagster image
+make pipeline-build
 
-# Run Dagster landing pipeline (Bronze → MinIO Parquet)
-dagster dev -m dagster_pipeline
+# Start all containers (simulation sources + pipeline)
+make pipeline-up
 
+# Stop all containers
+make pipeline-down
+```
+
+### Dashboard & Transformations (Future Phases)
+
+```bash
 # Run dbt transformations (Silver → Gold in ClickHouse)
 dbt run --profiles-dir ops/
 
@@ -188,15 +199,15 @@ The pipeline resolves identity by matching email and normalized phone (`+62...`)
 
 ## Roadmap
 
-| Phase | Deliverable |
-|---|---|
-| 0 | Infra — docker-compose for MinIO, ClickHouse, Postgres, Dagster, vendor API |
-| 1 | Simulation — world state, Faker generator, three mock sources, backfill |
-| 2 | Landing (Bronze) — Dagster ops extract each source to MinIO Parquet |
-| 3 | Silver — dbt models: phone/email, date/money, nulls, dedupe |
-| 4 | Gold — fact_bookings + dim_customer with entity resolution in ClickHouse |
-| 5 | Serving — Streamlit Customer 360; CLV + loyalty tiers (Gold/Silver/Churn-Risk) |
-| 6 | AI — LangChain agent over ClickHouse for query, explain, recommend |
+| Phase | Deliverable | Status |
+|---|---|---|
+| 0 | Infra — docker-compose for MinIO, ClickHouse, Postgres, Dagster, vendor API | Done |
+| 1 | Simulation — world state, Faker generator, three mock sources, backfill | Done |
+| 2 | Landing (Bronze) — Dagster ops extract each source to MinIO Parquet | Done |
+| 3 | Silver — dbt models: phone/email, date/money, nulls, dedupe | — |
+| 4 | Gold — fact_bookings + dim_customer with entity resolution in ClickHouse | — |
+| 5 | Serving — Streamlit Customer 360; CLV + loyalty tiers (Gold/Silver/Churn-Risk) | — |
+| 6 | AI — LangChain agent over ClickHouse for query, explain, recommend | — |
 
 ## Indonesian Data
 
