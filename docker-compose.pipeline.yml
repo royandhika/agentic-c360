@@ -1,0 +1,164 @@
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - wanderfuel-net
+
+  minio_init:
+    image: quay.io/minio/mc:latest
+    container_name: minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/${MINIO_BUCKET};
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    networks:
+      - wanderfuel-net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest-alpine
+    container_name: clickhouse
+    ports:
+      - "8123:8123"
+      - "9004:9000"
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "${CLICKHOUSE_USER}", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - wanderfuel-net
+
+  dagster-webserver:
+    build:
+      context: ./dagster_pipeline
+      dockerfile: Dockerfile
+    container_name: dagster-webserver
+    ports:
+      - "3000:3000"
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_pipeline/dagster_home
+      PYTHONPATH: /opt/dagster/dagster_pipeline
+      POSTGRES_APP_HOST: app_oltp
+      POSTGRES_APP_PORT: ${POSTGRES_APP_PORT}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER}
+      POSTGRES_APP_PASS: ${POSTGRES_APP_PASS}
+      POSTGRES_APP_DB: ${POSTGRES_APP_DB}
+      POSTGRES_DAGSTER_DB: ${POSTGRES_DAGSTER_DB}
+      CRM_SFTP_HOST: crm_sftp
+      CRM_SFTP_PORT: ${CRM_SFTP_PORT}
+      CRM_SFTP_USER: ${CRM_SFTP_USER}
+      CRM_SFTP_PASS: ${CRM_SFTP_PASS}
+      VENDOR_API_URL: http://vendor_api:8000
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    volumes:
+      - ./dagster_pipeline:/opt/dagster/dagster_pipeline
+    depends_on:
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      app_oltp:
+        condition: service_healthy
+    command:
+      - dagster-webserver
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "3000"
+      - -w
+      - /opt/dagster/dagster_pipeline/workspace.yaml
+    networks:
+      - wanderfuel-net
+
+  dagster-daemon:
+    build:
+      context: ./dagster_pipeline
+      dockerfile: Dockerfile
+    container_name: dagster-daemon
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_pipeline/dagster_home
+      PYTHONPATH: /opt/dagster/dagster_pipeline
+      POSTGRES_APP_HOST: app_oltp
+      POSTGRES_APP_PORT: ${POSTGRES_APP_PORT}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER}
+      POSTGRES_APP_PASS: ${POSTGRES_APP_PASS}
+      POSTGRES_APP_DB: ${POSTGRES_APP_DB}
+      POSTGRES_DAGSTER_DB: ${POSTGRES_DAGSTER_DB}
+      CRM_SFTP_HOST: crm_sftp
+      CRM_SFTP_PORT: ${CRM_SFTP_PORT}
+      CRM_SFTP_USER: ${CRM_SFTP_USER}
+      CRM_SFTP_PASS: ${CRM_SFTP_PASS}
+      VENDOR_API_URL: http://vendor_api:8000
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    volumes:
+      - ./dagster_pipeline:/opt/dagster/dagster_pipeline
+    depends_on:
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      app_oltp:
+        condition: service_healthy
+    command:
+      - dagster-daemon
+      - run
+      - -w
+      - /opt/dagster/dagster_pipeline/workspace.yaml
+    networks:
+      - wanderfuel-net
+
+volumes:
+  minio_data:
+  clickhouse_data:
+
+networks:
+  wanderfuel-net:
+    name: wanderfuel-net
+    external: true

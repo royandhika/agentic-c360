@@ -1,0 +1,4 @@
+load_from:
+  - python_module:
+      module_name: dagster_pipeline.definitions
+      location_name: wanderfuel_landing
