@@ -43,10 +43,10 @@ services:
     ports:
       - "2222:22"
     volumes:
-      - ./simulation/sources/crm_sftp/tickets:/home/crm_vendor/tickets
+      - ./simulation/sources/crm_sftp/tickets:/home/${CRM_SFTP_USER}/tickets
     command: ${CRM_SFTP_USER}:${CRM_SFTP_PASS}:1000:1000:tickets
     healthcheck:
-      test: ["CMD-SHELL", "ss -tlnp | grep :22"]
+      test: ["CMD-SHELL", "pgrep sshd"]
       interval: 5s
       timeout: 5s
       retries: 5

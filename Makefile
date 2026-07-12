@@ -12,11 +12,11 @@ help: ## Show this help
 	@echo "Targets:"
 	@echo "  setup        Create venv and install Python dependencies"
 	@echo "  infra-up     Start mock source containers (docker compose up)"
-	@echo "  infra-down   Stop mock source containers (docker compose down)"
+	@echo "  infra-down   Stop simulation containers (preserves volumes/data)"
 	@echo "  generate     Run one simulation day (use DATE=YYYY-MM-DD, HOLIDAY=1)"
 	@echo "  backfill     Run N simulation days (use DAYS=N, BACKFILL_START=YYYY-MM-DD)"
 	@echo "  reset        Wipe simulation state and generated artifacts"
-	@echo "  clean        Remove venv, marker, and __pycache__ dirs"
+	@echo "  clean        Stop containers, remove volumes, wipe venv + generated data"
 	@echo "  pipeline-build  Build Dagster image"
 	@echo "  pipeline-up     Start all containers (simulation + pipeline)"
 	@echo "  pipeline-down   Stop all containers"
@@ -56,14 +56,17 @@ reset:
 	bash simulation/scripts/reset.sh
 
 clean:
+	docker compose down -v --remove-orphans 2>/dev/null || true
 	rm -rf $(VENV)
 	rm -f $(MARKER)
-	rm -rf simulation/gen/__pycache__
-	rm -rf simulation/lib/__pycache__
-	rm -rf simulation/world/__pycache__
-	rm -rf simulation/scripts/__pycache__
-	rm -rf simulation/sources/vendor_api/__pycache__ 2>/dev/null || true
-	sudo rm -rf simulation/sources/vendor_api/__pycache__ 2>/dev/null || true
+	find simulation -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	rm -f simulation/world/world.db
+	rm -f simulation/sources/vendor_api/store/vendor.db
+	rm -f simulation/sources/vendor_api/store/vendor.db-wal
+	rm -f simulation/sources/vendor_api/store/vendor.db-shm
+	rm -f simulation/sources/crm_sftp/tickets/tickets_*.json
+	touch simulation/sources/vendor_api/store/.gitkeep
+	touch simulation/world/.gitkeep 2>/dev/null || (mkdir -p simulation/world && touch simulation/world/.gitkeep)
 
 pipeline-build: .env
 	docker compose -f docker-compose.pipeline.yml build

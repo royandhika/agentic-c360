@@ -94,27 +94,38 @@ def health():
 
 @app.get("/flights")
 def get_flights(
-    since: Optional[str] = Query(None, description="Filter bookings with booking_ts >= this ISO date"),
-    limit: int = Query(100, ge=1, le=10000),
+    since: Optional[str] = Query(None, description="Filter bookings with booking_ts >= this ISO timestamp"),
+    until: Optional[str] = Query(None, description="Filter bookings with booking_ts <= this ISO timestamp"),
+    limit: int = Query(10000, ge=0, le=10000),
     offset: int = Query(0, ge=0),
 ):
     conn = get_connection()
     try:
+        conditions = []
         params = []
-        where_clause = ""
         if since:
-            where_clause = "WHERE booking_ts >= ?"
+            conditions.append("booking_ts >= ?")
             params.append(since)
+        if until:
+            conditions.append("booking_ts <= ?")
+            params.append(until)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         total_row = conn.execute(
             f"SELECT COUNT(*) as cnt FROM flight_bookings {where_clause}", params
         ).fetchone()
         total = total_row["cnt"]
 
-        rows = conn.execute(
-            f"SELECT * FROM flight_bookings {where_clause} ORDER BY booking_ts DESC LIMIT ? OFFSET ?",
-            params + [limit, offset],
-        ).fetchall()
+        if limit == 0:
+            rows = conn.execute(
+                f"SELECT * FROM flight_bookings {where_clause} ORDER BY booking_ts DESC",
+                params,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM flight_bookings {where_clause} ORDER BY booking_ts DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
 
         data = [row_to_dict(r) for r in rows]
     finally:
@@ -130,27 +141,38 @@ def get_flights(
 
 @app.get("/experiences")
 def get_experiences(
-    since: Optional[str] = Query(None, description="Filter bookings with booking_ts >= this ISO date"),
-    limit: int = Query(100, ge=1, le=10000),
+    since: Optional[str] = Query(None, description="Filter bookings with booking_ts >= this ISO timestamp"),
+    until: Optional[str] = Query(None, description="Filter bookings with booking_ts <= this ISO timestamp"),
+    limit: int = Query(10000, ge=0, le=10000),
     offset: int = Query(0, ge=0),
 ):
     conn = get_connection()
     try:
+        conditions = []
         params = []
-        where_clause = ""
         if since:
-            where_clause = "WHERE booking_ts >= ?"
+            conditions.append("booking_ts >= ?")
             params.append(since)
+        if until:
+            conditions.append("booking_ts <= ?")
+            params.append(until)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         total_row = conn.execute(
             f"SELECT COUNT(*) as cnt FROM experience_bookings {where_clause}", params
         ).fetchone()
         total = total_row["cnt"]
 
-        rows = conn.execute(
-            f"SELECT * FROM experience_bookings {where_clause} ORDER BY booking_ts DESC LIMIT ? OFFSET ?",
-            params + [limit, offset],
-        ).fetchall()
+        if limit == 0:
+            rows = conn.execute(
+                f"SELECT * FROM experience_bookings {where_clause} ORDER BY booking_ts DESC",
+                params,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM experience_bookings {where_clause} ORDER BY booking_ts DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
 
         data = [row_to_dict(r) for r in rows]
     finally:
