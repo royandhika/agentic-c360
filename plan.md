@@ -42,7 +42,7 @@ The same human appears across all three systems under different identifiers. Hot
 
 ### Zones
 
-1. **Landing (Bronze)** — Dagster op extracts each source straight from memory into Parquet in MinIO. No local intermediate files.
+1. **Landing (Bronze)** — Dagster asset extracts each source straight from memory into Parquet in MinIO. No local intermediate files.
 2. **Silver** — dbt models standardize Indonesian phones (to `+62...`), lowercase emails, normalize dates/money (IDR — drop phantom cents, fix `Rp`/`.`-thousand-separator), handle nulls/sentinels (`TIDAK ADA`, `tidak diketahui`, `000-000-0000`), drop near-dupes.
 3. **Gold** — dbt dimensional models in ClickHouse: `fact_bookings`, `dim_customer` (resolved identities).
 4. **Serving** — Streamlit dashboard (labels Bahasa Indonesia or bilingual); entity resolution (merge app customer_id customer ↔ vendor email-only customer ↔ CRM email+phone customer), CLV in IDR, loyalty tiers.
@@ -56,7 +56,7 @@ agentic-c360/
   AGENTS.md
   STORY.md
   README.md
-  docker-compose.yml            # Postgres (app OLTP), FastAPI vendor API
+  docker-compose.yml            # Postgres (app OLTP), FastAPI vendor API, SFTP (CRM)
   docker-compose.orchestrator.yml   # MinIO, ClickHouse, Dagster
   .env.example
   Makefile
@@ -68,7 +68,7 @@ agentic-c360/
     sources/
       app_oltp/                 # PostgreSQL seed + daily inserter (customers, hotel_bookings)
       vendor_api/               # FastAPI app serving JSON flight/experience bookings
-      crm_s3/                   # SFTP JSON writer (daily ticket exports)
+      crm_sftp/                 # SFTP JSON writer (daily ticket exports)
     scripts/
       backfill.py               # --days N to backfill a long history
       run_day.py                # generate one travel day (--date YYYY-MM-DD)

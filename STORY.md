@@ -90,7 +90,7 @@ Seasonal spikes: Lebaran (mudik travel surge), Natal dan Tahun Baru (holiday tra
 | Transformation | dbt (SQL) + Pandas |
 | Warehouse | ClickHouse |
 | Dashboard | Streamlit (Bahasa/bilingual labels) |
-| AI | LangChain + LLM (Phase 5+) |
+| AI | LangChain + LLM (Phase 6) |
 
 ## Roadmap
 

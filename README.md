@@ -72,7 +72,7 @@ agentic-c360/
     sources/
       app_oltp/                   # PostgreSQL seed + daily inserter
       vendor_api/                 # FastAPI app serving JSON bookings
-      crm_s3/                     # SFTP JSON writer (daily ticket exports)
+      crm_sftp/                     # SFTP JSON writer (daily ticket exports)
     scripts/
       backfill.py                 # Generate N days of travel history
       run_day.py                  # Generate one travel day
@@ -200,7 +200,7 @@ The pipeline resolves identity by matching email and normalized phone (`+62...`)
 |---|---|---|
 | 0 | Infra — docker-compose for MinIO, ClickHouse, Postgres, Dagster, vendor API | Done |
 | 1 | Simulation — world state, Faker generator, three mock sources, backfill | Done |
-| 2 | Landing (Bronze) — Dagster ops extract each source to MinIO Parquet | Done |
+| 2 | Landing (Bronze) — Dagster assets extract each source to MinIO Parquet | Done |
 | 3 | Silver — dbt models: phone/email, date/money, nulls, dedupe | — |
 | 4 | Gold — fact_bookings + dim_customer with entity resolution in ClickHouse | — |
 | 5 | Serving — Streamlit Customer 360; CLV + loyalty tiers (Gold/Silver/Churn-Risk) | — |

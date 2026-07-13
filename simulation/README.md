@@ -62,7 +62,7 @@ The flow from `scripts/run_day.py --date YYYY-MM-DD`:
 | `gen/generator.py` | `DailyGenerator` class — the engine. Opens Postgres connection, SQLite vendor DB, and writes CRM ticket JSON files to the SFTP server directory. Provides `generate(date, holiday_mode)`. Four private generation methods, plus messiness helpers. |
 | `sources/app_oltp/init/` | PostgreSQL DDL (`01-schema.sql`) and seed data (`02-seed.sql`). Tables: `customers`, `hotel_bookings`. |
 | `sources/vendor_api/main.py` | FastAPI app serving `GET /flights?since=` and `GET /experiences?since=` from SQLite `vendor.db`. The Docker container for the mock vendor API. |
-| `sources/crm_s3/outbox/` | Directory where `tickets_YYYYMMDD.json` files land. Mimics SFTP upload. |
+| `sources/crm_sftp/tickets/` | Directory where `tickets_YYYYMMDD.json` files land. Mimics SFTP upload. |
 | `scripts/run_day.py` | CLI entry point: `--date YYYY-MM-DD [--holiday]`. One day. |
 | `scripts/backfill.py` | CLI entry point: `--days N [--start YYYY-MM-DD] [--holiday]`. N days. Skips already-generated dates. |
 | `scripts/reset.sh` | Wipes `world.db`, `vendor.db`, CRM JSON files, and truncates Postgres tables. |
@@ -239,8 +239,8 @@ sqlite3 simulation/sources/vendor_api/store/vendor.db \
 **CRM SFTP ticket JSON:**
 
 ```bash
-ls simulation/sources/crm_s3/outbox/
-python3 -c "import json; d=json.load(open('simulation/sources/crm_s3/outbox/tickets_20260715.json')); print(len(d), 'tickets')"
+ls simulation/sources/crm_sftp/tickets/
+python3 -c "import json; d=json.load(open('simulation/sources/crm_sftp/tickets/tickets_20260715.json')); print(len(d), 'tickets')"
 ```
 
 **World state (generation log):**
@@ -253,8 +253,8 @@ sqlite3 simulation/world/world.db \
 **Via the vendor API (when Docker is up):**
 
 ```bash
-curl http://localhost:8001/health
-curl "http://localhost:8001/flights?since=2026-07-01&limit=5" | python3 -m json.tool
+curl http://localhost:8000/health
+curl "http://localhost:8000/flights?since=2026-07-01&limit=5" | python3 -m json.tool
 ```
 
 ## For Dagster consumers

@@ -62,7 +62,7 @@ Never assume email alone is sufficient for identity. The same human routinely us
 - Backfill a long history: `python simulation/scripts/backfill.py --days 365`
 - Generate one travel day: `python simulation/scripts/run_day.py --date YYYY-MM-DD`
 - Wipe simulation state + generated artifacts: `simulation/scripts/reset.sh`
-- Infra up: `docker compose up -d`
+- Start generator: `make generator-up`
 - Start pipeline infra: `make orchestrator-up`
 - Stop pipeline infra: `make orchestrator-down`
 
@@ -86,10 +86,11 @@ MinIO (bronze Parquet landing), ClickHouse (warehouse), Postgres (app OLTP), Dag
 - `ConfigurableResource` subclasses in `dagster_pipeline/dagster_pipeline/resources.py`. Register **bare** in `definitions.py`: `PostgresResource()`.
 - Resources inject by **type annotation** on asset function params (not string keys).
 
-### Asset module pattern (`assets/landing.py`)
+### Asset module pattern (`assets/app_oltp.py`, `assets/vendor_api.py`, `assets/crm_sftp.py`)
 - **1 source → 1 module**, asset + checks colocated.
-- Shared helpers: `_DTYPE_MAP`+`_map_dtype()` (pandas→dagster types), `_build_path(bucket, date)`, `_read_parquet(minio, path)`.
-- **`group_name="landing"`**, **`kinds=["parquet","s3"]`** for all bronze assets.
+- Shared helpers: `_helpers.py` with `_DTYPE_MAP`+`_map_dtype()` (pandas→dagster types), `_build_path(bucket, date)`, `_read_parquet(minio, path)`, `_write_parquet(minio, df, path)`.
+- **`key_prefix=["bronze"]`**, **`group_name="landing"`**, **`kinds=["parquet","s3"]`** for all bronze assets.
+- **`DailyPartitionsDefinition(start_date="2026-01-01")`** on all landing assets.
 - **No `metadata=` on decorator** — column schema goes in `MaterializeResult` at runtime from `df.dtypes`.
 - Metadata keys: `dagster/column_schema`, `dagster/row_count`, `path`, `batch_date`.
 - Parquet path: `s3://{bucket}/{source}/{table}/year=YYYY/month=MM/day=DD/{table}_YYYYMMDD.parquet`
@@ -105,4 +106,4 @@ Checks read the parquet back from MinIO via `_build_path`+`_read_parquet`, use `
 
 ### Definitions
 - `load_assets_from_package_module(assets)` + `load_asset_checks_from_package_module(assets)`
-- Resources wired via `dg.Definitions(resources={"postgres": PostgresResource(), "minio": MinIOResource()})`
+- Resources wired via `dg.Definitions(resources={"postgres": PostgresResource(), "minio": MinIOResource(), "vendor_api": VendorApiResource(), "crm_sftp": SFTPSourceResource()})`
