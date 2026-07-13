@@ -79,3 +79,31 @@ MinIO (bronze Parquet landing), ClickHouse (warehouse), Postgres (app OLTP), Dag
 - `streamlit_app/` — Customer 360 dashboard (Bahasa/bilingual labels)
 - `plan.md` — full architecture; read it before non-trivial work
 - `STORY.md` — project backstory and context for any agent or contributor
+
+## Dagster pipeline conventions (Phase 2)
+
+### Resource pattern
+- **Always `EnvVar`**, never `os.getenv()` in resources or definitions. `EnvVar.int()` for ints.
+- `ConfigurableResource` subclasses in `dagster_pipeline/dagster_pipeline/resources.py`. Register **bare** in `definitions.py`: `PostgresResource()`.
+- Resources inject by **type annotation** on asset function params (not string keys).
+
+### Asset module pattern (`assets/landing.py`)
+- **1 source → 1 module**, asset + checks colocated.
+- Shared helpers: `_DTYPE_MAP`+`_map_dtype()` (pandas→dagster types), `_build_path(bucket, date)`, `_read_parquet(minio, path)`.
+- **`group_name="landing"`**, **`kinds=["parquet","s3"]`** for all bronze assets.
+- **No `metadata=` on decorator** — column schema goes in `MaterializeResult` at runtime from `df.dtypes`.
+- Metadata keys: `dagster/column_schema`, `dagster/row_count`, `path`, `batch_date`.
+- Parquet path: `s3://{bucket}/{source}/{table}/year=YYYY/month=MM/day=DD/{table}_YYYYMMDD.parquet`
+
+### Asset checks (3 per asset, colocated)
+| Check | Validates |
+|-------|-----------|
+| `{asset}_not_empty` | row count > 0 |
+| `{asset}_no_null_pks` | primary key column(s) no nulls |
+| `{asset}_unique_pks` | primary key column(s) no duplicates |
+
+Checks read the parquet back from MinIO via `_build_path`+`_read_parquet`, use `AssetCheckExecutionContext` + `context.partition_key`.
+
+### Definitions
+- `load_assets_from_package_module(assets)` + `load_asset_checks_from_package_module(assets)`
+- Resources wired via `dg.Definitions(resources={"postgres": PostgresResource(), "minio": MinIOResource()})`
