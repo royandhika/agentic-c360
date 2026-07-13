@@ -1,0 +1,15 @@
+clickhouse:
+  outputs:
+    dev:
+      type: clickhouse
+      driver: http
+      host: "{{ env_var('CLICKHOUSE_HOST') }}"
+      port: "{{ env_var('CLICKHOUSE_PORT') | int }}"
+      user: "{{ env_var('CLICKHOUSE_USER') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD') }}"
+      database: "{{ env_var('CLICKHOUSE_DB') }}"
+      schema: "{{ env_var('CLICKHOUSE_DB') }}"
+      connect_timeout: 30
+      send_receive_timeout: 120
+      sync_request_timeout: 30
+  target: dev

@@ -11,3 +11,6 @@ requests
 paramiko
 python-dotenv
 pytest
+dagster-dbt
+dbt-core
+dbt-clickhouse

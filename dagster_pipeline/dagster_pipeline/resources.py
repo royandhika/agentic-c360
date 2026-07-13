@@ -3,6 +3,7 @@ import json
 import paramiko
 import psycopg2
 import requests
+import clickhouse_connect
 import s3fs
 from dagster import ConfigurableResource, EnvVar
 
@@ -69,3 +70,20 @@ class SFTPSourceResource(ConfigurableResource):
             sftp.close()
             tpt.close()
         return data
+
+
+class ClickHouseResource(ConfigurableResource):
+    host: str = EnvVar("CLICKHOUSE_HOST")
+    port: int = EnvVar.int("CLICKHOUSE_PORT")
+    user: str = EnvVar("CLICKHOUSE_USER")
+    password: str = EnvVar("CLICKHOUSE_PASSWORD")
+    database: str = EnvVar("CLICKHOUSE_DB")
+
+    def get_client(self):
+        return clickhouse_connect.get_client(
+            host=self.host,
+            port=self.port,
+            username=self.user,
+            password=self.password,
+            database=self.database,
+        )

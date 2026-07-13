@@ -1,0 +1,37 @@
+version: 2
+models:
+  - name: silver_customers
+    description: Cleansed customer profiles — +62 phones, lowercase emails, stripped honorifics
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+  - name: silver_hotel_bookings
+    description: Cleansed hotel bookings — deduped, IDR normalized, status standardized
+    columns:
+      - name: booking_id
+        tests:
+          - unique
+          - not_null
+  - name: silver_flight_bookings
+    description: Cleansed flight bookings — deduped, email cleansed, status standardized
+    columns:
+      - name: booking_ref
+        tests:
+          - unique
+          - not_null
+  - name: silver_experience_bookings
+    description: Cleansed experience bookings — deduped, participants normalized
+    columns:
+      - name: booking_ref
+        tests:
+          - unique
+          - not_null
+  - name: silver_tickets
+    description: Cleansed support tickets — phones normalized, status/channel standardized
+    columns:
+      - name: ticket_id
+        tests:
+          - unique
+          - not_null

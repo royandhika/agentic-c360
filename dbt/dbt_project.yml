@@ -1,0 +1,13 @@
+name: 'wanderfuel'
+version: '1.0'
+config-version: 2
+profile: 'clickhouse'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["models/tests"]
+
+models:
+  wanderfuel:
+    silver:
+      +materialized: incremental

@@ -90,8 +90,12 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      DBT_PROJECT_DIR: /opt/dagster/dbt
+      DBT_PROFILES_DIR: /opt/dagster/ops
     volumes:
       - ./dagster_pipeline:/opt/dagster/dagster_pipeline
+      - ./dbt:/opt/dagster/dbt
+      - ./ops:/opt/dagster/ops
     depends_on:
       minio:
         condition: service_healthy
@@ -137,8 +141,12 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      DBT_PROJECT_DIR: /opt/dagster/dbt
+      DBT_PROFILES_DIR: /opt/dagster/ops
     volumes:
       - ./dagster_pipeline:/opt/dagster/dagster_pipeline
+      - ./dbt:/opt/dagster/dbt
+      - ./ops:/opt/dagster/ops
     depends_on:
       minio:
         condition: service_healthy
