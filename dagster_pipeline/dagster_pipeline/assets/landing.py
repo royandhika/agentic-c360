@@ -1,198 +1,165 @@
-import io
-import os
 from datetime import datetime
 
 import dagster as dg
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import s3fs
 
-MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "wanderfuel-bronze")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")
+from dagster_pipeline.resources import MinIOResource, PostgresResource
 
+daily_partitions = dg.DailyPartitionsDefinition(start_date="2026-01-01")
 
-class LandingConfig(dg.Config):
-    batch_date: str
-
-
-def _build_s3() -> s3fs.S3FileSystem:
-    return s3fs.S3FileSystem(
-        key=MINIO_ACCESS_KEY,
-        secret=MINIO_SECRET_KEY,
-        client_kwargs={"endpoint_url": f"http://{MINIO_ENDPOINT}"},
-    )
+_DTYPE_MAP = {
+    "object": "string",
+    "str": "string",
+    "int64": "integer",
+    "Int64": "integer",
+    "float64": "float",
+    "Float64": "float",
+    "datetime64[ns]": "datetime",
+    "datetime64[us]": "datetime",
+    "datetime64[ns, UTC]": "datetime",
+}
 
 
-def _write_parquet(df: pd.DataFrame, source: str, table: str, batch_date: str) -> tuple[str, int]:
-    s3 = _build_s3()
+def _map_dtype(dtype) -> str:
+    return _DTYPE_MAP.get(str(dtype), str(dtype))
+
+
+def _build_path(bucket: str, batch_date: str) -> str:
     dt = datetime.strptime(batch_date, "%Y-%m-%d")
-    path = (
-        f"s3://{MINIO_BUCKET}/{source}/{table}"
+    return (
+        f"s3://{bucket}/app_oltp/customers"
         f"/year={dt.year}/month={dt.month:02d}/day={dt.day:02d}"
-        f"/{table}_{dt.strftime('%Y%m%d')}.parquet"
+        f"/customers_{dt.strftime('%Y%m%d')}.parquet"
     )
-    t = pa.Table.from_pandas(df)
-    with s3.open(path, "wb") as f:
-        pq.write_table(t, f)
-    logger = dg.get_dagster_logger()
-    logger.info(f"Wrote {len(df)} rows to {path}")
-    return path, len(df)
+
+
+def _read_parquet(minio: MinIOResource, path: str) -> pd.DataFrame:
+    s3 = minio.get_s3()
+    with s3.open(path, "rb") as f:
+        table = pq.read_table(f)
+    return table.to_pandas()
 
 
 @dg.asset(
     key_prefix=["bronze"],
-    description="Land hotel_bookings from app OLTP (Postgres) filtered by batch_date",
+    description=(
+        "Daily snapshot of the customers table from app OLTP (Postgres), landed to MinIO as Parquet. "
+        "Contains complete customer identity data — name, email, phone, address, "
+        "loyalty_tier, preferred_airline. "
+        "Full-snapshot partitioning provides an audit trail per day and enables "
+        "point-in-time recovery of customer state."
+    ),
+    group_name="landing",
+    owners=["team:data-engineering"],
+    tags={"layer": "bronze", "pii": "true", "domain": "travel"},
+    kinds=["parquet", "s3"],
+    partitions_def=daily_partitions,
 )
-def hotel_bookings(context: dg.AssetExecutionContext, config: LandingConfig):
-    import psycopg2
+def customers(
+    context: dg.AssetExecutionContext,
+    postgres: PostgresResource,
+    minio: MinIOResource,
+):
+    batch_date = context.partition_key
+    context.log.info(f"Landing customers snapshot for {batch_date}")
 
-    batch_date = config.batch_date
-    context.log.info(f"Landing hotel_bookings for {batch_date}")
-
-    conn = psycopg2.connect(
-        host=os.environ.get("POSTGRES_APP_HOST"),
-        port=int(os.environ.get("POSTGRES_APP_PORT", 5432)),
-        user=os.environ.get("POSTGRES_APP_USER"),
-        password=os.environ.get("POSTGRES_APP_PASS"),
-        dbname=os.environ.get("POSTGRES_APP_DB"),
-    )
-
-    query = "SELECT * FROM hotel_bookings WHERE booking_ts::date = %s"
-    df = pd.read_sql_query(query, conn, params=(batch_date,))
-    conn.close()
-
-    path, rows = _write_parquet(df, "app_oltp", "hotel_bookings", batch_date)
-    return dg.MaterializeResult(
-        metadata={
-            "rows": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
-        }
-    )
-
-
-@dg.asset(
-    key_prefix=["bronze"],
-    description="Land customers full snapshot from app OLTP (Postgres)",
-)
-def customers(context: dg.AssetExecutionContext, config: LandingConfig):
-    import psycopg2
-
-    batch_date = config.batch_date
-    context.log.info("Landing customers snapshot")
-
-    conn = psycopg2.connect(
-        host=os.environ.get("POSTGRES_APP_HOST"),
-        port=int(os.environ.get("POSTGRES_APP_PORT", 5432)),
-        user=os.environ.get("POSTGRES_APP_USER"),
-        password=os.environ.get("POSTGRES_APP_PASS"),
-        dbname=os.environ.get("POSTGRES_APP_DB"),
-    )
-
+    conn = postgres.get_connection()
     df = pd.read_sql_query("SELECT * FROM customers", conn)
     conn.close()
 
-    path, rows = _write_parquet(df, "app_oltp", "customers", batch_date)
+    column_schema = dg.TableSchema(
+        columns=[
+            dg.TableColumn(name=col, type=_map_dtype(dtype))
+            for col, dtype in df.dtypes.items()
+        ]
+    )
+
+    s3 = minio.get_s3()
+    path = _build_path(minio.bucket, batch_date)
+
+    table = pa.Table.from_pandas(df)
+    with s3.open(path, "wb") as f:
+        pq.write_table(table, f)
+
+    rows = len(df)
+    context.log.info(f"Wrote {rows} rows to {path}")
+
     return dg.MaterializeResult(
         metadata={
-            "rows": dg.MetadataValue.int(rows),
+            "dagster/column_schema": dg.MetadataValue.table_schema(column_schema),
+            "dagster/row_count": dg.MetadataValue.int(rows),
             "path": dg.MetadataValue.text(path),
             "batch_date": dg.MetadataValue.text(batch_date),
         }
     )
 
 
-@dg.asset(
-    key_prefix=["bronze"],
-    description="Land flight_bookings from vendor API",
+@dg.asset_check(
+    asset=customers,
+    description="Verify the landed customers snapshot contains at least one row",
 )
-def flight_bookings(context: dg.AssetExecutionContext, config: LandingConfig):
-    import requests
+def customers_not_empty(
+    context: dg.AssetCheckExecutionContext,
+    minio: MinIOResource,
+):
+    batch_date = context.partition_key
+    path = _build_path(minio.bucket, batch_date)
+    df = _read_parquet(minio, path)
+    row_count = len(df)
 
-    batch_date = config.batch_date
-    context.log.info(f"Landing flight_bookings for {batch_date}")
-
-    vendor_api_url = os.environ.get("VENDOR_API_URL", "http://vendor_api:8000")
-    url = f"{vendor_api_url}/flights?since={batch_date}T00:00:00&until={batch_date}T23:59:59"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    df = pd.DataFrame(data)
-
-    path, rows = _write_parquet(df, "vendor_api", "flight_bookings", batch_date)
-    return dg.MaterializeResult(
+    passed = row_count > 0
+    return dg.AssetCheckResult(
+        passed=passed,
         metadata={
-            "rows": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
-        }
+            "dagster/row_count": dg.MetadataValue.int(row_count),
+            "partition": dg.MetadataValue.text(batch_date),
+        },
     )
 
 
-@dg.asset(
-    key_prefix=["bronze"],
-    description="Land experience_bookings from vendor API",
+@dg.asset_check(
+    asset=customers,
+    description="Verify customer_id has no null values",
 )
-def experience_bookings(context: dg.AssetExecutionContext, config: LandingConfig):
-    import requests
+def customers_no_null_pks(
+    context: dg.AssetCheckExecutionContext,
+    minio: MinIOResource,
+):
+    batch_date = context.partition_key
+    path = _build_path(minio.bucket, batch_date)
+    df = _read_parquet(minio, path)
 
-    batch_date = config.batch_date
-    context.log.info(f"Landing experience_bookings for {batch_date}")
-
-    vendor_api_url = os.environ.get("VENDOR_API_URL", "http://vendor_api:8000")
-    url = f"{vendor_api_url}/experiences?since={batch_date}T00:00:00&until={batch_date}T23:59:59"
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    df = pd.DataFrame(data)
-
-    path, rows = _write_parquet(df, "vendor_api", "experience_bookings", batch_date)
-    return dg.MaterializeResult(
+    null_count = int(df["customer_id"].isna().sum())
+    passed = null_count == 0
+    return dg.AssetCheckResult(
+        passed=passed,
         metadata={
-            "rows": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
-        }
+            "null_customer_ids": dg.MetadataValue.int(null_count),
+            "partition": dg.MetadataValue.text(batch_date),
+        },
     )
 
 
-@dg.asset(
-    key_prefix=["bronze"],
-    description="Land tickets from CRM SFTP (JSON exports)",
+@dg.asset_check(
+    asset=customers,
+    description="Verify customer_id has no duplicate values",
 )
-def tickets(context: dg.AssetExecutionContext, config: LandingConfig):
-    import paramiko
+def customers_unique_pks(
+    context: dg.AssetCheckExecutionContext,
+    minio: MinIOResource,
+):
+    batch_date = context.partition_key
+    path = _build_path(minio.bucket, batch_date)
+    df = _read_parquet(minio, path)
 
-    batch_date = config.batch_date
-    context.log.info(f"Landing tickets for {batch_date}")
-
-    host = os.environ.get("CRM_SFTP_HOST")
-    port = int(os.environ.get("CRM_SFTP_PORT", 22))
-    user = os.environ.get("CRM_SFTP_USER")
-    password = os.environ.get("CRM_SFTP_PASS")
-
-    dt = datetime.strptime(batch_date, "%Y-%m-%d")
-    remote_path = f"tickets/{dt.year}/{dt.month:02d}/{dt.day:02d}/tickets_{dt.strftime('%Y%m%d')}.json"
-
-    transport = paramiko.Transport((host, port))
-    transport.connect(username=user, password=password)
-    sftp = paramiko.SFTPClient.from_transport(transport)
-
-    with sftp.open(remote_path, "r") as f:
-        content = f.read()
-    df = pd.read_json(io.BytesIO(content))
-
-    sftp.close()
-    transport.close()
-
-    path, rows = _write_parquet(df, "crm", "tickets", batch_date)
-    return dg.MaterializeResult(
+    dup_count = int(df["customer_id"].duplicated().sum())
+    passed = dup_count == 0
+    return dg.AssetCheckResult(
+        passed=passed,
         metadata={
-            "rows": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
-        }
+            "duplicate_customer_ids": dg.MetadataValue.int(dup_count),
+            "partition": dg.MetadataValue.text(batch_date),
+        },
     )

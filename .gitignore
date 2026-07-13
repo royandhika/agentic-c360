@@ -49,3 +49,5 @@ dagster_pipeline/dagster_home/runs.db
 dagster_pipeline/dagster_home/schedules.db
 dagster_pipeline/dagster_home/.logs_queue/
 dagster_pipeline/dagster_home/.telemetry/
+dagster_pipeline/dagster_home/storage/
+dagster_pipeline/dagster_home/logs/
