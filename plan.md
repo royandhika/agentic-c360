@@ -57,7 +57,7 @@ agentic-c360/
   STORY.md
   README.md
   docker-compose.yml            # Postgres (app OLTP), FastAPI vendor API
-  docker-compose.pipeline.yml   # MinIO, ClickHouse, Dagster
+  docker-compose.orchestrator.yml   # MinIO, ClickHouse, Dagster
   .env.example
   Makefile
   simulation/                   # imitates real-world sources; standalone cron/script

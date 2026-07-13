@@ -63,9 +63,8 @@ Never assume email alone is sufficient for identity. The same human routinely us
 - Generate one travel day: `python simulation/scripts/run_day.py --date YYYY-MM-DD`
 - Wipe simulation state + generated artifacts: `simulation/scripts/reset.sh`
 - Infra up: `docker compose up -d`
-- Build Dagster image: `make pipeline-build`
-- Start pipeline infra: `make pipeline-up`
-- Stop pipeline infra: `make pipeline-down`
+- Start pipeline infra: `make orchestrator-up`
+- Stop pipeline infra: `make orchestrator-down`
 
 ## Infra topology (docker-compose, local)
 

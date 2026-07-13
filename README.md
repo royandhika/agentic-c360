@@ -62,7 +62,7 @@ agentic-c360/
   README.md                       # This file
   Makefile                        # Common tasks (setup, generate, backfill, reset)
   docker-compose.yml              # Mock sources (Postgres app OLTP, vendor API)
-  docker-compose.pipeline.yml     # MinIO, ClickHouse, Dagster
+  docker-compose.orchestrator.yml     # MinIO, ClickHouse, Dagster
   .env.example                    # Environment variable template
   simulation/                     # Standalone data generator (cron/script driven)
     config.yaml                   # SEED, volume, error/dupe/drift knobs
@@ -104,7 +104,7 @@ ALL credentials MUST be set in the `.env` file. No hardcoded credentials, secret
 make setup
 
 # Start mock sources (Postgres app OLTP, vendor API)
-make infra-up
+make generator-up
 ```
 
 ### Generate Simulated History
@@ -126,14 +126,11 @@ make backfill DAYS=90 BACKFILL_START=2024-01-01
 ### Pipeline Infrastructure (Phase 2+)
 
 ```bash
-# Build Dagster image
-make pipeline-build
-
 # Start all containers (simulation sources + pipeline)
-make pipeline-up
+make orchestrator-up
 
 # Stop all containers
-make pipeline-down
+make orchestrator-down
 ```
 
 ### Dashboard & Transformations (Future Phases)
@@ -150,7 +147,7 @@ streamlit run streamlit_app/app.py
 
 ```bash
 make reset        # Wipe simulation state and generated artifacts
-make infra-down   # Stop mock source containers
+make generator-down   # Stop mock source containers
 make clean        # Remove venv
 ```
 

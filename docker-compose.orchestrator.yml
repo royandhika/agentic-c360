@@ -70,22 +70,23 @@ services:
       DAGSTER_HOME: /opt/dagster/dagster_pipeline/dagster_home
       PYTHONPATH: /opt/dagster/dagster_pipeline
       POSTGRES_APP_HOST: app_oltp
-      POSTGRES_APP_PORT: ${POSTGRES_APP_PORT}
+      POSTGRES_APP_PORT: 5432
       POSTGRES_APP_USER: ${POSTGRES_APP_USER}
       POSTGRES_APP_PASS: ${POSTGRES_APP_PASS}
       POSTGRES_APP_DB: ${POSTGRES_APP_DB}
       POSTGRES_DAGSTER_DB: ${POSTGRES_DAGSTER_DB}
       CRM_SFTP_HOST: crm_sftp
-      CRM_SFTP_PORT: ${CRM_SFTP_PORT}
+      CRM_SFTP_PORT: 22
       CRM_SFTP_USER: ${CRM_SFTP_USER}
       CRM_SFTP_PASS: ${CRM_SFTP_PASS}
+      CRM_SFTP_PATH: ${CRM_SFTP_PATH:-tickets}
       VENDOR_API_URL: http://vendor_api:8000
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ENDPOINT: minio:9000
       MINIO_BUCKET: ${MINIO_BUCKET}
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
-      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
@@ -95,8 +96,6 @@ services:
       minio:
         condition: service_healthy
       clickhouse:
-        condition: service_healthy
-      app_oltp:
         condition: service_healthy
     command:
       - dagster-webserver
@@ -118,22 +117,23 @@ services:
       DAGSTER_HOME: /opt/dagster/dagster_pipeline/dagster_home
       PYTHONPATH: /opt/dagster/dagster_pipeline
       POSTGRES_APP_HOST: app_oltp
-      POSTGRES_APP_PORT: ${POSTGRES_APP_PORT}
+      POSTGRES_APP_PORT: 5432
       POSTGRES_APP_USER: ${POSTGRES_APP_USER}
       POSTGRES_APP_PASS: ${POSTGRES_APP_PASS}
       POSTGRES_APP_DB: ${POSTGRES_APP_DB}
       POSTGRES_DAGSTER_DB: ${POSTGRES_DAGSTER_DB}
       CRM_SFTP_HOST: crm_sftp
-      CRM_SFTP_PORT: ${CRM_SFTP_PORT}
+      CRM_SFTP_PORT: 22
       CRM_SFTP_USER: ${CRM_SFTP_USER}
       CRM_SFTP_PASS: ${CRM_SFTP_PASS}
+      CRM_SFTP_PATH: ${CRM_SFTP_PATH:-tickets}
       VENDOR_API_URL: http://vendor_api:8000
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ENDPOINT: minio:9000
       MINIO_BUCKET: ${MINIO_BUCKET}
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
-      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
@@ -143,8 +143,6 @@ services:
       minio:
         condition: service_healthy
       clickhouse:
-        condition: service_healthy
-      app_oltp:
         condition: service_healthy
     command:
       - dagster-daemon

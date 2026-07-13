@@ -1,4 +1,4 @@
-.PHONY: help setup infra-up infra-down generate backfill reset clean pipeline-build pipeline-up pipeline-down
+.PHONY: help setup generate backfill reset clean generator-up generator-down orchestrator-up orchestrator-down
 
 -include .env
 export
@@ -10,16 +10,15 @@ help: ## Show this help
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  setup        Create venv and install Python dependencies"
-	@echo "  infra-up     Start mock source containers (docker compose up)"
-	@echo "  infra-down   Stop simulation containers (preserves volumes/data)"
-	@echo "  generate     Run one simulation day (use DATE=YYYY-MM-DD, HOLIDAY=1)"
-	@echo "  backfill     Run N simulation days (use DAYS=N, BACKFILL_START=YYYY-MM-DD)"
-	@echo "  reset        Wipe simulation state and generated artifacts"
-	@echo "  clean        Stop containers, remove volumes, wipe venv + generated data"
-	@echo "  pipeline-build  Build Dagster image"
-	@echo "  pipeline-up     Start all containers (simulation + pipeline)"
-	@echo "  pipeline-down   Stop all containers"
+	@echo "  setup        		Create venv and install Python dependencies"
+	@echo "  generator-up		Start mock source containers (docker compose up)"
+	@echo "  generate    		Run one simulation day (use DATE=YYYY-MM-DD, HOLIDAY=1)"
+	@echo "  backfill     		Run N simulation days (use DAYS=N, BACKFILL_START=YYYY-MM-DD)"
+	@echo "  reset        		Wipe simulation state and generated artifacts"
+	@echo "  clean        		Stop containers, remove volumes, wipe venv + generated data"
+	@echo "  generator-down		Stop generator containers (preserves volumes/data)"
+	@echo "  orchestrator-up  	Start orchestrator containers (requires generator up)"
+	@echo "  orchestrator-down	Stop orchestrator + generator containers"
 
 .env:
 	@if [ ! -f .env ]; then \
@@ -35,10 +34,10 @@ $(MARKER): simulation/requirements.txt
 	$(VENV)/bin/pip install -r simulation/requirements.txt
 	touch $(MARKER)
 
-infra-up: .env
-	docker compose up -d
+generator-up: .env
+	docker compose up -d --build
 
-infra-down:
+generator-down:
 	docker compose down
 
 generate: $(MARKER) .env
@@ -68,11 +67,8 @@ clean:
 	touch simulation/sources/vendor_api/store/.gitkeep
 	touch simulation/world/.gitkeep 2>/dev/null || (mkdir -p simulation/world && touch simulation/world/.gitkeep)
 
-pipeline-build: .env
-	docker compose -f docker-compose.pipeline.yml build
+orchestrator-up: generator-up
+	docker compose -f docker-compose.orchestrator.yml up -d --build
 
-pipeline-up: .env
-	docker compose -f docker-compose.yml -f docker-compose.pipeline.yml up -d
-
-pipeline-down:
-	docker compose -f docker-compose.yml -f docker-compose.pipeline.yml down
+orchestrator-down: generator-down
+	docker compose -f docker-compose.orchestrator.yml down
