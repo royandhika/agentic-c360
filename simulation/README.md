@@ -162,9 +162,9 @@ Credentials (Postgres, SFTP) are in `.env` only. On first run the Makefile auto-
 ## Startup order (fresh clone)
 
 ```
-make setup     # 1. creates .env (if missing), installs Python deps
-make infra-up  # 2. Docker Compose reads .env → starts app_oltp, vendor_api, crm_sftp
-make generate  # 3. runs generator, 3 sources populated
+make setup        # 1. creates .env (if missing), installs Python deps
+make generator-up  # 2. Docker Compose reads .env → starts app_oltp, vendor_api, crm_sftp
+make generate     # 3. runs generator, 3 sources populated
 ```
 
 ### Who reads `.env` and when
