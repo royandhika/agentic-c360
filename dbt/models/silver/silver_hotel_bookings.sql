@@ -14,7 +14,7 @@ with source as (
         payment_method::String as payment_method,
         booking_status::String as booking_status,
         booking_ts::String as booking_ts
-    from {{ bronze_s3_path('app_oltp', 'hotel_bookings', var('min_date'), var('max_date')) }}
+    from {{ bronze_table('hotel_bookings', var('min_date'), var('max_date')) }}
 ),
 
 cleansed as (
@@ -73,7 +73,7 @@ cleansed as (
             lower(trim(booking_status)) = 'tidak_hadir', 'no_show',
             lower(trim(booking_status))
         ) as booking_status,
-        formatDateTime(parseDateTimeBestEffortOrNull(booking_ts), '%Y-%m-%d %H:%M:%S') as booking_ts
+        parseDateTimeBestEffortOrNull(booking_ts) as booking_ts
     from source
 ),
 

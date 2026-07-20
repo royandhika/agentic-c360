@@ -15,7 +15,7 @@ with source as (
         resolved_at::Nullable(String) as resolved_at,
         category::String as category,
         agent_name::String as agent_name
-    from {{ bronze_s3_path('crm', 'tickets', var('min_date'), var('max_date')) }}
+    from {{ bronze_table('tickets', var('min_date'), var('max_date')) }}
 ),
 
 cleansed as (
@@ -29,8 +29,8 @@ cleansed as (
         lower(trim(status)) as status,
         lower(trim(priority)) as priority,
         lower(trim(channel)) as channel,
-        formatDateTime(parseDateTimeBestEffortOrNull(created_at), '%Y-%m-%d %H:%M:%S') as created_at,
-        formatDateTime(parseDateTimeBestEffortOrNull(resolved_at), '%Y-%m-%d %H:%M:%S') as resolved_at,
+        parseDateTimeBestEffortOrNull(created_at) as created_at,
+        parseDateTimeBestEffortOrNull(resolved_at) as resolved_at,
         lower(trim(category)) as category,
         trim(
             arrayStringConcat(

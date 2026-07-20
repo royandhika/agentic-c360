@@ -14,7 +14,7 @@ with source as (
         preferred_airline::Nullable(String) as preferred_airline,
         created_at::String as created_at,
         updated_at::String as updated_at
-    from {{ bronze_s3_path('app_oltp', 'customers', var('min_date'), var('max_date')) }}
+    from {{ bronze_table('customers', var('min_date'), var('max_date')) }}
 ),
 
 cleansed as (
@@ -49,8 +49,8 @@ cleansed as (
         ) as postal_code,
         coalesce(nullif(lower(trim(loyalty_tier)), ''), 'basic') as loyalty_tier,
         nullif(trim(preferred_airline), '') as preferred_airline,
-        formatDateTime(parseDateTimeBestEffortOrNull(created_at), '%Y-%m-%d %H:%M:%S') as created_at,
-        formatDateTime(parseDateTimeBestEffortOrNull(updated_at), '%Y-%m-%d %H:%M:%S') as updated_at
+        parseDateTimeBestEffortOrNull(created_at) as created_at,
+        parseDateTimeBestEffortOrNull(updated_at) as updated_at
     from source
 ),
 

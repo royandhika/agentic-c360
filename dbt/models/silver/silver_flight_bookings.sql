@@ -16,7 +16,7 @@ with source as (
         payment_method::String as payment_method,
         booking_status::String as booking_status,
         booking_ts::String as booking_ts
-    from {{ bronze_s3_path('vendor_api', 'flights', var('min_date'), var('max_date')) }}
+    from {{ bronze_table('flights', var('min_date'), var('max_date')) }}
 ),
 
 cleansed as (
@@ -35,8 +35,8 @@ cleansed as (
         upper(trim(flight_number)) as flight_number,
         upper(trim(origin)) as origin,
         upper(trim(destination)) as destination,
-        formatDateTime(parseDateTimeBestEffortOrNull(departure_ts), '%Y-%m-%d %H:%M:%S') as departure_ts,
-        formatDateTime(parseDateTimeBestEffortOrNull(arrival_ts), '%Y-%m-%d %H:%M:%S') as arrival_ts,
+        parseDateTimeBestEffortOrNull(departure_ts) as departure_ts,
+        parseDateTimeBestEffortOrNull(arrival_ts) as arrival_ts,
         {{ strip_honorifics('passenger_name') }} as passenger_name,
         lower(trim(seat_class)) as seat_class,
         {{ normalize_amount_idr('amount_idr') }} as amount_idr,
@@ -61,7 +61,7 @@ cleansed as (
             lower(trim(booking_status)) = 'tidak_hadir', 'no_show',
             lower(trim(booking_status))
         ) as booking_status,
-        formatDateTime(parseDateTimeBestEffortOrNull(booking_ts), '%Y-%m-%d %H:%M:%S') as booking_ts
+        parseDateTimeBestEffortOrNull(booking_ts) as booking_ts
     from source
 ),
 
