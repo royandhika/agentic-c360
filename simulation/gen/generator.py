@@ -31,7 +31,7 @@ from lib.id_locales import (
     TOURIST_CITIES, TOURIST_CITY_WEIGHTS,
     HOTEL_BOOKING_STATUSES, FLIGHT_BOOKING_STATUSES,
     EXPERIENCE_BOOKING_STATUSES,
-    weighted_choice,
+    weighted_choice, generate_indonesian_phone,
 )
 
 
@@ -241,10 +241,10 @@ class DailyGenerator:
 
     # ── Hotel Bookings (App OLTP PostgreSQL) ───────────────────
 
-    def _upsert_app_customer(self, world_customer):
+    def _upsert_app_customer(self, world_customer, date_str):
         cur = self.pg_conn.cursor()
         email = world_customer.get('email') or self.fake.email()
-        phone = world_customer.get('phone') or self.fake.phone_number()
+        phone = world_customer.get('phone') or generate_indonesian_phone(self.rng)
 
         name = world_customer.get('canonical_name') or self.fake.name()
         addr = world_customer.get('address') or self.fake.address()
@@ -252,6 +252,14 @@ class DailyGenerator:
         province = world_customer.get('province') or 'DKI Jakarta'
         postal = world_customer.get('postal_code') or '10110'
         loyalty = world_customer.get('loyalty_tier') or 'basic'
+
+        # Time of day on date_str — keeps created_at/updated_at within the
+        # simulated partition day so the bronze CDC filter
+        # `WHERE updated_at >= start AND updated_at < end` returns rows.
+        h = self.rng.randint(6, 23)
+        m = self.rng.randint(0, 59)
+        s = self.rng.randint(0, 59)
+        ts_today = f"{date_str} {h:02d}:{m:02d}:{s:02d}"
 
         cur.execute(
             "SELECT customer_id FROM customers WHERE email = %s OR phone = %s",
@@ -264,8 +272,8 @@ class DailyGenerator:
             cur.execute(
                 "UPDATE customers SET full_name = %s, email = %s, phone = %s, "
                 "address = %s, city = %s, province = %s, postal_code = %s, "
-                "loyalty_tier = %s, updated_at = NOW() WHERE customer_id = %s",
-                (name, email, phone, addr, app_city, province, postal, loyalty, cid),
+                "loyalty_tier = %s, updated_at = %s WHERE customer_id = %s",
+                (name, email, phone, addr, app_city, province, postal, loyalty, ts_today, cid),
             )
         else:
             cid = f"CST-{world_customer['id']:06d}-{self.fake.random_int(100000, 999999)}"
@@ -273,8 +281,9 @@ class DailyGenerator:
                 """INSERT INTO customers
                    (customer_id, email, phone, full_name, address, city, province,
                     postal_code, loyalty_tier, created_at, updated_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())""",
-                (cid, email, phone, name, addr, app_city, province, postal, loyalty),
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (cid, email, phone, name, addr, app_city, province, postal, loyalty,
+                 ts_today, ts_today),
             )
 
         return cid, email, phone, name
@@ -289,13 +298,17 @@ class DailyGenerator:
             if is_new:
                 cust = self.world.get_or_create_customer(source='app')
             else:
-                existings = self.world.get_random_existing_customers(1, source='app')
+                # Pull from the entire customer base (vendor/crm included) so
+                # a customer who previously booked a flight/experience now
+                # shows up as an app OLTP customer — the canonical anchor.
+                existings = self.world.get_random_existing_customers(1, source=None)
                 if existings and len(existings) > 0:
                     cust = existings[0]
+                    self.world.set_source_flag(cust['id'], 'app')
                 else:
                     cust = self.world.get_or_create_customer(source='app')
 
-            customer_id, email, phone, name = self._upsert_app_customer(cust)
+            customer_id, email, phone, name = self._upsert_app_customer(cust, date_str)
 
             hotel_city = self.world.get_random_itinerary_hotel_city()
             hotel = self.world.get_random_hotel(city=hotel_city)
@@ -389,13 +402,16 @@ class DailyGenerator:
 
         rows = []
         for i in range(count):
-            is_new = self.rng.random() < 0.40
+            is_new = self.rng.random() < 0.20
             if is_new:
                 cust = self.world.get_or_create_customer(source='vendor')
             else:
-                existings = self.world.get_random_existing_customers(1, source='vendor')
+                # Shared customer base: pick any prior customer (incl. app) so
+                # flight_bookings.email overlaps customers.email in app OLTP.
+                existings = self.world.get_random_existing_customers(1, source=None)
                 if existings and len(existings) > 0:
                     cust = existings[0]
+                    self.world.set_source_flag(cust['id'], 'vendor')
                 else:
                     cust = self.world.get_or_create_customer(source='vendor')
 
@@ -483,13 +499,16 @@ class DailyGenerator:
             return
 
         for i in range(count):
-            is_new = self.rng.random() < 0.20
+            is_new = self.rng.random() < 0.15
             if is_new:
                 cust = self.world.get_or_create_customer(source='vendor')
             else:
-                existings = self.world.get_random_existing_customers(1, source='vendor')
+                # Same shared customer base so experiences overlap with the
+                # app OLTP customers that hotel/CRM gen produces.
+                existings = self.world.get_random_existing_customers(1, source=None)
                 if existings and len(existings) > 0:
                     cust = existings[0]
+                    self.world.set_source_flag(cust['id'], 'vendor')
                 else:
                     cust = self.world.get_or_create_customer(source='vendor')
 
@@ -569,24 +588,29 @@ class DailyGenerator:
 
         tickets = []
         for i in range(count):
-            is_new = self.rng.random() < 0.70
+            is_new = self.rng.random() < 0.25
             if is_new:
-                existings = self.world.get_random_existing_customers(1, source='crm')
+                cust = self.world.get_or_create_customer(source='crm')
+            else:
+                # Shared customer base: pick any prior customer (incl. app, vendor)
+                # so the CRM ticket's customer_phone overlaps customers.phone in
+                # app OLTP — the phone bridge that downstream identity resolution
+                # relies on.
+                existings = self.world.get_random_existing_customers(1, source=None)
                 if existings and len(existings) > 0:
                     cust = existings[0]
+                    self.world.set_source_flag(cust['id'], 'crm')
                 else:
                     cust = self.world.get_or_create_customer(source='crm')
-            else:
-                cust = self.world.get_or_create_customer(source='crm')
 
             email = cust.get('email') or self.fake.email()
-            if self.rng.random() < 0.15 and cust.get('alternate_email') and cust['alternate_email'].strip():
+            if self.rng.random() < 0.25 and cust.get('alternate_email') and cust['alternate_email'].strip():
                 email = cust['alternate_email']
-            elif self.rng.random() < 0.10:
+            elif self.rng.random() < 0.05:
                 email = self.fake.email()
 
-            phone = cust.get('phone') or self.fake.phone_number()
-            use_alt_phone = self.rng.random() < 0.10 and cust.get('alternate_phone') and cust['alternate_phone'].strip()
+            phone = cust.get('phone') or generate_indonesian_phone(self.rng)
+            use_alt_phone = self.rng.random() < 0.20 and cust.get('alternate_phone') and cust['alternate_phone'].strip()
             if use_alt_phone:
                 phone = cust['alternate_phone']
 
