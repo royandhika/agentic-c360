@@ -2,160 +2,169 @@ from datetime import datetime
 
 import dagster as dg
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
-from dagster_pipeline.resources import MinIOResource, SFTPSourceResource
+from dagster_pipeline.resources import ClickHouseResource, SFTPSourceResource
 from dagster_pipeline.assets._helpers import (
-    _build_path,
-    _map_dtype,
-    _read_parquet,
+    _column_schema,
+    _ensure_bronze_schema,
+    _insert_bronze,
+    _read_bronze,
+    _truncate_partition,
 )
 
 daily_partitions = dg.DailyPartitionsDefinition(start_date="2026-01-01")
 
+# bronze_tickets stays on the default multi_run BackfillPolicy: each
+# partition is materialized in its own run (one SFTP fetch per run). The
+# iteration pattern below uses context.partition_keys (a single-element list
+# in multi_run mode) so the code reads identically across both policies.
+
 
 @dg.asset(
-    key_prefix=["bronze"],
+    name="bronze_tickets",
     description=(
-        "Daily snapshot of CRM support tickets from SFTP, landed to MinIO as Parquet. "
-        "Contains support interactions in Bahasa Indonesia with customer identity data "
-        "(email + phone) used as the identity bridge between sources."
+        "Daily slice of CRM support tickets from SFTP, landed directly into "
+        "ClickHouse bronze_tickets. Reads the partition-keyed JSON file "
+        "`tickets_<YYYYMMDD>.json` from the CRM SFTP server. Contains support "
+        "interactions in Bahasa Indonesia with customer identity data "
+        "(email + phone) used as the identity bridge between sources. "
+        "Uses the default multi_run backfill policy — each partition is "
+        "materialized in its own run."
     ),
-    group_name="landing",
+    group_name="bronze",
     owners=["team:data-engineering"],
     tags={"layer": "bronze", "pii": "true", "domain": "travel"},
-    kinds=["parquet", "s3"],
+    kinds=["table", "clickhouse"],
     partitions_def=daily_partitions,
 )
-def tickets(
+def bronze_tickets(
     context: dg.AssetExecutionContext,
     crm_sftp: SFTPSourceResource,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    context.log.info(f"Landing CRM tickets for {batch_date}")
+    _ensure_bronze_schema(clickhouse)
 
-    dt = datetime.strptime(batch_date, "%Y-%m-%d")
-    filename = f"tickets_{dt.strftime('%Y%m%d')}.json"
+    total_rows = 0
+    schema_df = None
+    source_files = []
+    for batch_date in context.partition_keys:
+        context.log.info(f"Landing CRM tickets for {batch_date}")
+        _truncate_partition(clickhouse, "bronze_tickets", batch_date)
 
-    data = crm_sftp.read_json(filename)
-    df = pd.DataFrame(data)
+        dt = datetime.strptime(batch_date, "%Y-%m-%d")
+        filename = f"tickets_{dt.strftime('%Y%m%d')}.json"
+        source_files.append(filename)
 
-    column_schema = None
-    if len(df) > 0:
-        column_schema = dg.TableSchema(
-            columns=[
-                dg.TableColumn(name=col, type=_map_dtype(dtype))
-                for col, dtype in df.dtypes.items()
-            ]
-        )
+        data = crm_sftp.read_json(filename)
+        df = pd.DataFrame(data)
 
-    path = _build_path(minio.bucket, "crm", "tickets", batch_date)
-
-    s3 = minio.get_s3()
-    table = pa.Table.from_pandas(df)
-    with s3.open(path, "wb") as f:
-        pq.write_table(table, f)
-
-    rows = len(df)
-    context.log.info(f"Wrote {rows} rows to {path}")
+        rows = 0
+        if not df.empty:
+            rows = _insert_bronze(clickhouse, "bronze_tickets", df, batch_date)
+            if schema_df is None:
+                schema_df = df
+        context.log.info(f"Landed {rows} ticket rows for {batch_date}")
+        total_rows += rows
 
     metadata = {
-        "dagster/row_count": dg.MetadataValue.int(rows),
-        "path": dg.MetadataValue.text(path),
-        "batch_date": dg.MetadataValue.text(batch_date),
+        "dagster/row_count": dg.MetadataValue.int(total_rows),
+        "table": dg.MetadataValue.text("wanderfuel.bronze_tickets"),
+        "partitions": dg.MetadataValue.json(context.partition_keys),
+        "source_files": dg.MetadataValue.json(source_files),
     }
-    if column_schema:
-        metadata["dagster/column_schema"] = dg.MetadataValue.table_schema(column_schema)
+    if schema_df is not None:
+        metadata["dagster/column_schema"] = _column_schema(schema_df)
 
     return dg.MaterializeResult(metadata=metadata)
 
 
 @dg.asset_check(
-    asset=tickets,
-    description="Verify the landed CRM tickets snapshot contains at least one row",
+    asset=bronze_tickets,
+    description="Verify the landed CRM tickets slice contains at least one row",
 )
-def tickets_not_empty(
+def bronze_tickets_not_empty(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "crm", "tickets", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_tickets", keys)
     row_count = len(df)
-
-    passed = row_count > 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=row_count > 0,
         metadata={
             "dagster/row_count": dg.MetadataValue.int(row_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=tickets,
+    asset=bronze_tickets,
     description="Verify ticket_id has no null values",
 )
-def tickets_no_null_pks(
+def bronze_tickets_no_null_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "crm", "tickets", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_tickets", keys)
 
     pk_col = "ticket_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
     null_count = int(df[pk_col].isna().sum())
-    passed = null_count == 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=null_count == 0,
         metadata={
             "null_ticket_ids": dg.MetadataValue.int(null_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=tickets,
-    description="Verify ticket_id has no duplicate values",
+    asset=bronze_tickets,
+    description="Verify ticket_id has no duplicate values within each partition",
 )
-def tickets_unique_pks(
+def bronze_tickets_unique_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "crm", "tickets", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_tickets", keys)
 
     pk_col = "ticket_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
-    dup_count = int(df[pk_col].duplicated().sum())
-    passed = dup_count == 0
+    dup_count = 0
+    if "ingest_date" in df.columns:
+        for _, group in df.groupby("ingest_date"):
+            dup_count += int(group[pk_col].duplicated().sum())
+    else:
+        dup_count = int(df[pk_col].duplicated().sum())
+
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=dup_count == 0,
         metadata={
             "duplicate_ticket_ids": dg.MetadataValue.int(dup_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )

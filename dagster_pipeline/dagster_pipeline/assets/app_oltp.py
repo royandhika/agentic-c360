@@ -1,296 +1,326 @@
 import dagster as dg
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
-from dagster_pipeline.resources import MinIOResource, PostgresResource
+from dagster_pipeline.resources import ClickHouseResource, PostgresResource
 from dagster_pipeline.assets._helpers import (
-    _build_path,
-    _map_dtype,
-    _read_parquet,
+    _column_schema,
+    _ensure_bronze_schema,
+    _insert_bronze,
+    _iter_partition_windows,
+    _read_bronze,
+    _truncate_partition,
 )
 
 daily_partitions = dg.DailyPartitionsDefinition(start_date="2026-01-01")
 
+_SINGLE_RUN = dg.BackfillPolicy.single_run()
+
 
 @dg.asset(
-    key_prefix=["bronze"],
+    name="bronze_customers",
     description=(
-        "Daily snapshot of the customers table from app OLTP (Postgres), landed to MinIO as Parquet. "
-        "Contains complete customer identity data — name, email, phone, address, "
-        "loyalty_tier, preferred_airline. "
-        "Full-snapshot partitioning provides an audit trail per day and enables "
-        "point-in-time recovery of customer state."
+        "Daily CDC slice of the customers table from app OLTP (Postgres), "
+        "landed directly into ClickHouse bronze_customers. Captures only rows "
+        "whose updated_at falls within the partition day (new customers and "
+        "customers touched by an upsert that day). Contains complete identity "
+        "data — name, email, phone, address, loyalty_tier, preferred_airline."
     ),
-    group_name="landing",
+    group_name="bronze",
     owners=["team:data-engineering"],
     tags={"layer": "bronze", "pii": "true", "domain": "travel"},
-    kinds=["parquet", "s3"],
+    kinds=["table", "clickhouse"],
     partitions_def=daily_partitions,
+    backfill_policy=_SINGLE_RUN,
 )
-def customers(
+def bronze_customers(
     context: dg.AssetExecutionContext,
     postgres: PostgresResource,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    context.log.info(f"Landing customers snapshot for {batch_date}")
+    _ensure_bronze_schema(clickhouse)
 
-    conn = postgres.get_connection()
-    df = pd.read_sql_query("SELECT * FROM customers", conn)
-    conn.close()
+    total_rows = 0
+    schema_df = None
+    for batch_date, window in _iter_partition_windows(context, daily_partitions):
+        context.log.info(
+            f"Landing customers CDC slice for {batch_date} ({window.start}..{window.end})"
+        )
+        _truncate_partition(clickhouse, "bronze_customers", batch_date)
 
-    column_schema = dg.TableSchema(
-        columns=[
-            dg.TableColumn(name=col, type=_map_dtype(dtype))
-            for col, dtype in df.dtypes.items()
-        ]
-    )
+        query = (
+            "SELECT customer_id, email, phone, full_name, address, city, province, "
+            "postal_code, loyalty_tier, preferred_airline, created_at, updated_at "
+            "FROM customers "
+            "WHERE updated_at >= %(start)s AND updated_at < %(end)s"
+        )
+        conn = postgres.get_connection()
+        try:
+            df = pd.read_sql_query(
+                query, conn, params={"start": window.start, "end": window.end}
+            )
+        finally:
+            conn.close()
 
-    path = _build_path(minio.bucket, "app_oltp", "customers", batch_date)
+        rows = _insert_bronze(clickhouse, "bronze_customers", df, batch_date)
+        total_rows += rows
+        if not df.empty and schema_df is None:
+            schema_df = df
+        context.log.info(f"Landed {rows} customer rows for {batch_date}")
 
-    s3 = minio.get_s3()
-    table = pa.Table.from_pandas(df)
-    with s3.open(path, "wb") as f:
-        pq.write_table(table, f)
-
-    rows = len(df)
-    context.log.info(f"Wrote {rows} rows to {path}")
-
+    keys = context.partition_keys
     return dg.MaterializeResult(
         metadata={
-            "dagster/column_schema": dg.MetadataValue.table_schema(column_schema),
-            "dagster/row_count": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
+            "dagster/column_schema": _column_schema(schema_df if schema_df is not None else pd.DataFrame()),
+            "dagster/row_count": dg.MetadataValue.int(total_rows),
+            "table": dg.MetadataValue.text("wanderfuel.bronze_customers"),
+            "partitions": dg.MetadataValue.json(keys),
         }
     )
 
 
 @dg.asset_check(
-    asset=customers,
-    description="Verify the landed customers snapshot contains at least one row",
+    asset=bronze_customers,
+    description="Verify the landed customers slice contains at least one row",
 )
-def customers_not_empty(
+def bronze_customers_not_empty(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "customers", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_customers", keys)
     row_count = len(df)
-
-    passed = row_count > 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=row_count > 0,
         metadata={
             "dagster/row_count": dg.MetadataValue.int(row_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=customers,
+    asset=bronze_customers,
     description="Verify customer_id has no null values",
 )
-def customers_no_null_pks(
+def bronze_customers_no_null_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "customers", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_customers", keys)
 
     pk_col = "customer_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
     null_count = int(df[pk_col].isna().sum())
-    passed = null_count == 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=null_count == 0,
         metadata={
             "null_customer_ids": dg.MetadataValue.int(null_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=customers,
-    description="Verify customer_id has no duplicate values",
+    asset=bronze_customers,
+    description="Verify customer_id has no duplicate values within each partition",
 )
-def customers_unique_pks(
+def bronze_customers_unique_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "customers", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_customers", keys)
 
     pk_col = "customer_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
-    dup_count = int(df[pk_col].duplicated().sum())
-    passed = dup_count == 0
+    # Duplicates per partition — same customer may legitimately appear on
+    # multiple days (CDC slice per partition), so check within each
+    # ingest_date partition.
+    dup_count = 0
+    if "ingest_date" in df.columns:
+        for _, group in df.groupby("ingest_date"):
+            dup_count += int(group[pk_col].duplicated().sum())
+    else:
+        dup_count = int(df[pk_col].duplicated().sum())
+
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=dup_count == 0,
         metadata={
             "duplicate_customer_ids": dg.MetadataValue.int(dup_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset(
-    key_prefix=["bronze"],
+    name="bronze_hotel_bookings",
     description=(
-        "Daily snapshot of the hotel_bookings table from app OLTP (Postgres), landed to MinIO as Parquet. "
-        "Contains hotel reservation data linked to customers via customer_id FK."
+        "Daily slice of the hotel_bookings table from app OLTP (Postgres), "
+        "landed directly into ClickHouse bronze_hotel_bookings. Contains only "
+        "bookings whose booking_ts falls within the partition day, linked to "
+        "customers via customer_id FK."
     ),
-    group_name="landing",
+    group_name="bronze",
     owners=["team:data-engineering"],
     tags={"layer": "bronze", "pii": "true", "domain": "travel"},
-    kinds=["parquet", "s3"],
+    kinds=["table", "clickhouse"],
     partitions_def=daily_partitions,
+    backfill_policy=_SINGLE_RUN,
 )
-def hotel_bookings(
+def bronze_hotel_bookings(
     context: dg.AssetExecutionContext,
     postgres: PostgresResource,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    context.log.info(f"Landing hotel_bookings snapshot for {batch_date}")
+    _ensure_bronze_schema(clickhouse)
 
-    conn = postgres.get_connection()
-    df = pd.read_sql_query("SELECT * FROM hotel_bookings", conn)
-    conn.close()
+    total_rows = 0
+    schema_df = None
+    for batch_date, window in _iter_partition_windows(context, daily_partitions):
+        context.log.info(
+            f"Landing hotel_bookings for {batch_date} ({window.start}..{window.end})"
+        )
+        _truncate_partition(clickhouse, "bronze_hotel_bookings", batch_date)
 
-    column_schema = dg.TableSchema(
-        columns=[
-            dg.TableColumn(name=col, type=_map_dtype(dtype))
-            for col, dtype in df.dtypes.items()
-        ]
-    )
+        query = (
+            "SELECT booking_id, customer_id, hotel_name, hotel_city, check_in_date, "
+            "check_out_date, room_type, guests, amount_idr, payment_method, "
+            "booking_status, booking_ts "
+            "FROM hotel_bookings "
+            "WHERE booking_ts >= %(start)s AND booking_ts < %(end)s"
+        )
+        conn = postgres.get_connection()
+        try:
+            df = pd.read_sql_query(
+                query, conn, params={"start": window.start, "end": window.end}
+            )
+        finally:
+            conn.close()
 
-    path = _build_path(minio.bucket, "app_oltp", "hotel_bookings", batch_date)
-
-    s3 = minio.get_s3()
-    table = pa.Table.from_pandas(df)
-    with s3.open(path, "wb") as f:
-        pq.write_table(table, f)
-
-    rows = len(df)
-    context.log.info(f"Wrote {rows} rows to {path}")
+        rows = _insert_bronze(clickhouse, "bronze_hotel_bookings", df, batch_date)
+        total_rows += rows
+        if not df.empty and schema_df is None:
+            schema_df = df
+        context.log.info(f"Landed {rows} hotel booking rows for {batch_date}")
 
     return dg.MaterializeResult(
         metadata={
-            "dagster/column_schema": dg.MetadataValue.table_schema(column_schema),
-            "dagster/row_count": dg.MetadataValue.int(rows),
-            "path": dg.MetadataValue.text(path),
-            "batch_date": dg.MetadataValue.text(batch_date),
+            "dagster/column_schema": _column_schema(schema_df if schema_df is not None else pd.DataFrame()),
+            "dagster/row_count": dg.MetadataValue.int(total_rows),
+            "table": dg.MetadataValue.text("wanderfuel.bronze_hotel_bookings"),
+            "partitions": dg.MetadataValue.json(context.partition_keys),
         }
     )
 
 
 @dg.asset_check(
-    asset=hotel_bookings,
-    description="Verify the landed hotel_bookings snapshot contains at least one row",
+    asset=bronze_hotel_bookings,
+    description="Verify the landed hotel_bookings slice contains at least one row",
 )
-def hotel_bookings_not_empty(
+def bronze_hotel_bookings_not_empty(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "hotel_bookings", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_hotel_bookings", keys)
     row_count = len(df)
-
-    passed = row_count > 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=row_count > 0,
         metadata={
             "dagster/row_count": dg.MetadataValue.int(row_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=hotel_bookings,
+    asset=bronze_hotel_bookings,
     description="Verify booking_id has no null values",
 )
-def hotel_bookings_no_null_pks(
+def bronze_hotel_bookings_no_null_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "hotel_bookings", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_hotel_bookings", keys)
 
     pk_col = "booking_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
     null_count = int(df[pk_col].isna().sum())
-    passed = null_count == 0
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=null_count == 0,
         metadata={
             "null_booking_ids": dg.MetadataValue.int(null_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
 
 
 @dg.asset_check(
-    asset=hotel_bookings,
-    description="Verify booking_id has no duplicate values",
+    asset=bronze_hotel_bookings,
+    description="Verify booking_id has no duplicate values within each partition",
 )
-def hotel_bookings_unique_pks(
+def bronze_hotel_bookings_unique_pks(
     context: dg.AssetCheckExecutionContext,
-    minio: MinIOResource,
+    clickhouse: ClickHouseResource,
 ):
-    batch_date = context.partition_key
-    path = _build_path(minio.bucket, "app_oltp", "hotel_bookings", batch_date)
-    df = _read_parquet(minio, path)
+    keys = list(context.partition_keys)
+    df = _read_bronze(clickhouse, "bronze_hotel_bookings", keys)
 
     pk_col = "booking_id"
     if pk_col not in df.columns:
         return dg.AssetCheckResult(
             passed=False,
             metadata={
-                "error": dg.MetadataValue.text(f"Column '{pk_col}' not found in partition data (empty result set)"),
-                "partition": dg.MetadataValue.text(batch_date),
+                "error": dg.MetadataValue.text(
+                    f"Column '{pk_col}' not found in partitions {keys} (empty result set)"
+                ),
+                "partitions": dg.MetadataValue.json(keys),
             },
         )
 
-    dup_count = int(df[pk_col].duplicated().sum())
-    passed = dup_count == 0
+    dup_count = 0
+    if "ingest_date" in df.columns:
+        for _, group in df.groupby("ingest_date"):
+            dup_count += int(group[pk_col].duplicated().sum())
+    else:
+        dup_count = int(df[pk_col].duplicated().sum())
+
     return dg.AssetCheckResult(
-        passed=passed,
+        passed=dup_count == 0,
         metadata={
             "duplicate_booking_ids": dg.MetadataValue.int(dup_count),
-            "partition": dg.MetadataValue.text(batch_date),
+            "partitions": dg.MetadataValue.json(keys),
         },
     )
