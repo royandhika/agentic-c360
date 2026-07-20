@@ -51,3 +51,8 @@ dagster_pipeline/dagster_home/.logs_queue/
 dagster_pipeline/dagster_home/.telemetry/
 dagster_pipeline/dagster_home/storage/
 dagster_pipeline/dagster_home/logs/
+dagster_pipeline/dagster_home/.nux/
+dagster_pipeline/dagster_home/dagster.yaml
+
+# ── dbt user state ───────────────────────────────────
+ops/.user.yml
