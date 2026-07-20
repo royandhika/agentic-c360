@@ -5,9 +5,11 @@ profile: 'clickhouse'
 
 model-paths: ["models"]
 macro-paths: ["macros"]
-test-paths: ["models/tests"]
+test-paths: ["tests"]
 
 models:
   wanderfuel:
     silver:
+      +materialized: incremental
+    gold:
       +materialized: incremental

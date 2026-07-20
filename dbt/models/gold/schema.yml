@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: dim_customer
+    description: "Resolved customer identity across app_oltp, vendor_api, crm; email/phone bridge per AGENTS.md identity rules. CLV in IDR drives the gold/silver/churn_risk loyalty band."
+    columns:
+      - name: resolved_customer_id
+        tests:
+          - not_null
+          - unique
+      - name: clv_idr
+        description: "Sum of completed-bookings amount_idr across all three sources."
+      - name: loyalty_tier
+        description: "gold >= 10jt; silver 2jt-10jt; churn_risk < 2jt OR dormant > 90d."
+      - name: identity_confidence
+        description: "high (app/email direct match) > phone_bridge (phone-bridge match) > email (email-only vendor or unmatched crm)."
+
+  - name: fact_bookings
+    description: "Unified booking fact (hotel + flight + experience) with resolved_customer_id via dim_customer.source_customer_ids arrayJoin. Unresolved rows keep NULL resolved_customer_id."
+    columns:
+      - name: booking_id
+        tests:
+          - not_null
+          - unique
+      - name: resolved_customer_id
+        description: "Nullable — allowed for unresolved vendor/CRM rows."
+        tests:
+          - not_null:
+              severity: warn
+
+  - name: mart_customer_clv
+    description: "Per-customer CLV, churn-risk score, support-health rollup, and recommended next action; direct feed for the Streamlit 360 dashboard."
+    columns:
+      - name: resolved_customer_id
+        tests:
+          - not_null
+          - unique
+
+  - name: mart_route_monthly
+    description: "Monthly booking/revenue aggregation by route (flights ORIG-DEST) or destination city (hotel/experience); flag Lebaran/Natal/Imlek/school holiday windows for 2026."
+    columns:
+      - name: _pk
+        tests:
+          - not_null
+          - unique
