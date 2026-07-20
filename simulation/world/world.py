@@ -13,10 +13,11 @@ from id_locales import (
     HOTEL_NAMES, AIRLINES, AIRPORTS, DOMESTIC_ROUTES,
     INTERNATIONAL_ROUTES, EXPERIENCE_CATALOG, LOYALTY_TIERS,
     LOYALTY_TIER_WEIGHTS, TOURIST_CITIES, TOURIST_CITY_WEIGHTS,
-    weighted_choice,
+    weighted_choice, generate_indonesian_phone, generate_mobile_phone,
 )
 
 _FAKE = Faker('id_ID')
+_WORLD_RNG = random.Random(4242)
 
 
 def _now_iso():
@@ -252,7 +253,13 @@ class WorldState:
     def _create_customer(self, cur, email, phone, name, source):
         canonical_name = name if name else _FAKE.name()
         email = email if email else _FAKE.email()
-        phone = phone if phone else _FAKE.phone_number()
+        phone = phone if phone else generate_indonesian_phone(_WORLD_RNG)
+
+        # Identity-fragmentation: same human keeps separate personal/work emails
+        # and an occasional alternate number across sources — this is the
+        # raw material that downstream entity resolution has to stitch together.
+        alternate_email = self._alternate_email(email)
+        alternate_phone = generate_mobile_phone(_WORLD_RNG)
 
         province_name = random.choice(PROVINCES)[0]
         city_info = self._random_city_for_province(province_name)
@@ -276,18 +283,43 @@ class WorldState:
 
         cur.execute("""
             INSERT INTO customers
-            (canonical_name, email, phone, address, city, province, postal_code,
+            (canonical_name, email, phone, alternate_email, alternate_phone,
+             address, city, province, postal_code,
              created_at, is_app_customer, is_vendor_customer, is_crm_customer,
              loyalty_tier, lifetime_value_idr)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            canonical_name, email, phone, address, city, province_name,
-            postal_code, now, is_app, is_vendor, is_crm, loyalty, 0,
+            canonical_name, email, phone, alternate_email, alternate_phone,
+            address, city, province_name, postal_code,
+            now, is_app, is_vendor, is_crm, loyalty, 0,
         ))
         self._conn.commit()
 
         cur.execute("SELECT * FROM customers WHERE id = ?", (cur.lastrowid,))
         return dict(cur.fetchone())
+
+    def _alternate_email(self, primary_email):
+        """Personal vs work email drift across sources — base on same local name."""
+        if not primary_email or '@' not in primary_email:
+            return _FAKE.email()
+        local, _ = primary_email.split('@', 1)
+        domain = _WORLD_RNG.choice([
+            'gmail.com', 'yahoo.co.id', 'outlook.com', 'hotmail.com',
+            'yahoo.com', 'protonmail.com',
+        ])
+        suffix = _WORLD_RNG.choice(['', '', '.id', str(_WORLD_RNG.randint(1, 99))])
+        return f"{local}{suffix}@{domain}"
+
+    def set_source_flag(self, customer_id, source):
+        """Mark a reused world customer as also belonging to `source`."""
+        field = {'app': 'is_app_customer',
+                 'vendor': 'is_vendor_customer',
+                 'crm': 'is_crm_customer'}.get(source)
+        if not field:
+            return
+        cur = self._conn.cursor()
+        cur.execute(f"UPDATE customers SET {field} = 1 WHERE id = ?", (customer_id,))
+        self._conn.commit()
 
     def _random_city_for_province(self, province_name):
         cities = INDONESIAN_CITIES.get(province_name, [])

@@ -915,3 +915,32 @@ def weighted_choice(weights_dict, rng=None):
     items = list(weights_dict.keys())
     w = list(weights_dict.values())
     return _rng.choices(items, weights=w)[0]
+
+
+def _random_digits(rng, n):
+    return ''.join(str(rng.randint(0, 9)) for _ in range(n))
+
+
+def generate_mobile_phone(rng):
+    """Indonesian mobile phone in `08xx-xxxx-xxxx` form (12 digits incl. leading 0)."""
+    prefix = rng.choice(PHONE_MOBILE_PREFIXES)
+    suffix = _random_digits(rng, 8)
+    raw = prefix + suffix
+    return f"{raw[:4]}-{raw[4:8]}-{raw[8:]}"
+
+
+def generate_landline_phone(rng):
+    """Indonesian landline in `0xx-xxxx-xxxx` form. Rare; for work/office contacts."""
+    area_code = rng.choice(list(LANDLINE_AREA_CODES.keys()))
+    subscriber_len = 7 if len(area_code) <= 2 else 6
+    subscriber = _random_digits(rng, subscriber_len)
+    head = subscriber[:subscriber_len - 4]
+    tail = subscriber[subscriber_len - 4:]
+    return f"0{area_code}-{head}-{tail}"
+
+
+def generate_indonesian_phone(rng):
+    """Mostly mobile (95%), occasionally landline — realistic Indonesian contact mix."""
+    if rng.random() < 0.95:
+        return generate_mobile_phone(rng)
+    return generate_landline_phone(rng)
