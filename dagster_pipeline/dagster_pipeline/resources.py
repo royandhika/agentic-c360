@@ -4,7 +4,6 @@ import paramiko
 import psycopg2
 import requests
 import clickhouse_connect
-import s3fs
 from dagster import ConfigurableResource, EnvVar
 
 
@@ -22,20 +21,6 @@ class PostgresResource(ConfigurableResource):
             user=self.user,
             password=self.password,
             dbname=self.dbname,
-        )
-
-
-class MinIOResource(ConfigurableResource):
-    endpoint: str = EnvVar("MINIO_ENDPOINT")
-    bucket: str = EnvVar("MINIO_BUCKET")
-    access_key: str = EnvVar("MINIO_ACCESS_KEY")
-    secret_key: str = EnvVar("MINIO_SECRET_KEY")
-
-    def get_s3(self) -> s3fs.S3FileSystem:
-        return s3fs.S3FileSystem(
-            key=self.access_key,
-            secret=self.secret_key,
-            client_kwargs={"endpoint_url": f"http://{self.endpoint}"},
         )
 
 

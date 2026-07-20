@@ -3,8 +3,6 @@ dagster-webserver
 dagster-postgres
 pandas
 pyarrow
-boto3
-s3fs
 clickhouse-connect
 psycopg2-binary
 requests

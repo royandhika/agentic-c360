@@ -5,7 +5,6 @@ from . import assets
 from .dbt_assets import dbt_project, wanderfuel_dbt_assets
 from .resources import (
     ClickHouseResource,
-    MinIOResource,
     PostgresResource,
     SFTPSourceResource,
     VendorApiResource,
@@ -19,7 +18,6 @@ defs = dg.Definitions(
     asset_checks=landing_checks,
     resources={
         "postgres": PostgresResource(),
-        "minio": MinIOResource(),
         "vendor_api": VendorApiResource(),
         "crm_sftp": SFTPSourceResource(),
         "clickhouse": ClickHouseResource(),

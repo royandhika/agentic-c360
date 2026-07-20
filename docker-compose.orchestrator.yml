@@ -1,42 +1,4 @@
 services:
-  minio:
-    image: quay.io/minio/minio:latest
-    container_name: minio
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: [ "CMD", "mc", "ready", "local" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - wanderfuel-net
-
-  minio_init:
-    image: quay.io/minio/mc:latest
-    container_name: minio_init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      mc mb --ignore-existing local/${MINIO_BUCKET};
-      "
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET}
-    networks:
-      - wanderfuel-net
-
   clickhouse:
     image: clickhouse/clickhouse-server:latest-alpine
     container_name: clickhouse
@@ -81,10 +43,6 @@ services:
       CRM_SFTP_PASS: ${CRM_SFTP_PASS}
       CRM_SFTP_PATH: ${CRM_SFTP_PATH:-tickets}
       VENDOR_API_URL: http://vendor_api:8000
-      MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
@@ -97,8 +55,6 @@ services:
       - ./dbt:/opt/dagster/dbt
       - ./ops:/opt/dagster/ops
     depends_on:
-      minio:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
     command:
@@ -132,10 +88,6 @@ services:
       CRM_SFTP_PASS: ${CRM_SFTP_PASS}
       CRM_SFTP_PATH: ${CRM_SFTP_PATH:-tickets}
       VENDOR_API_URL: http://vendor_api:8000
-      MINIO_ENDPOINT: minio:9000
-      MINIO_BUCKET: ${MINIO_BUCKET}
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: 8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
@@ -148,8 +100,6 @@ services:
       - ./dbt:/opt/dagster/dbt
       - ./ops:/opt/dagster/ops
     depends_on:
-      minio:
-        condition: service_healthy
       clickhouse:
         condition: service_healthy
     command:
@@ -161,7 +111,6 @@ services:
       - wanderfuel-net
 
 volumes:
-  minio_data:
   clickhouse_data:
 
 networks:
