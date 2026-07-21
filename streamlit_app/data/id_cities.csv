@@ -1,0 +1,76 @@
+city,lat,lng,province
+Bali,-8.4095,115.1889,Bali
+Yogyakarta,-7.7956,110.3695,DI Yogyakarta
+Bandung,-6.9175,107.6191,Jawa Barat
+Jakarta,-6.2088,106.8456,DKI Jakarta
+Jakarta Pusat,-6.1865,106.8345,DKI Jakarta
+Jakarta Selatan,-6.2625,106.8025,DKI Jakarta
+Jakarta Barat,-6.1675,106.7675,DKI Jakarta
+Jakarta Timur,-6.2250,106.9000,DKI Jakarta
+Jakarta Utara,-6.1175,106.8725,DKI Jakarta
+Labuan Bajo,-8.4965,119.8877,Nusa Tenggara Timur
+Lombok,-8.6500,116.3249,Nusa Tenggara Barat
+Surabaya,-7.2575,112.7521,Jawa Timur
+Medan,3.5952,98.6722,Sumatera Utara
+Makassar,-5.1477,119.4327,Sulawesi Selatan
+Manado,1.4748,124.8421,Sulawesi Utara
+Semarang,-6.9932,110.4203,Jawa Tengah
+Palembang,-2.9761,104.7754,Sumatera Selatan
+Padang,-0.9471,100.4172,Sumatera Barat
+Pekanbaru,0.5071,101.4478,Riau
+Batam,1.0456,104.0305,Kepulauan Riau
+Tanjungpinang,0.9179,104.4465,Kepulauan Riau
+Jambi,-1.6101,103.6130,Jambi
+Bengkulu,-3.7928,102.2608,Bengkulu
+Lampung,-5.4299,105.2622,Lampung
+Pontianak,-0.0263,109.3425,Kalimantan Barat
+Banjarmasin,-3.3186,114.5944,Kalimantan Selatan
+Balikpapan,-1.2379,116.8527,Kalimantan Timur
+Samarinda,-0.5022,117.1536,Kalimantan Timur
+Palangkaraya,-2.2079,113.9000,Kalimantan Tengah
+Mataram,-8.5833,116.1167,Nusa Tenggara Barat
+Kupang,-10.1772,123.6070,Nusa Tenggara Timur
+Ambon,-3.6554,128.1908,Maluku
+Malang,-7.9667,112.6333,Jawa Timur
+Depok,-6.4000,106.8167,Jawa Barat
+Bogor,-6.5964,106.7962,Jawa Barat
+Bekasi,-6.2383,106.9756,Jawa Barat
+Solo,-7.5667,110.8167,Jawa Tengah
+Purwokerto,-7.4333,109.2333,Jawa Tengah
+Cirebon,-6.7167,108.5667,Jawa Barat
+Kuta,-8.7167,115.1667,Bali
+Seminyak,-8.6914,115.1553,Bali
+Ubud,-8.5069,115.2625,Bali
+Canggu,-8.6481,115.1357,Bali
+Nusa Dua,-8.8000,115.2264,Bali
+Sanur,-8.6772,115.2633,Bali
+Jimbaran,-8.7869,115.1614,Bali
+Senggigi,-8.4900,116.0400,Nusa Tenggara Barat
+Gili Trawangan,-8.3495,116.0389,Nusa Tenggara Barat
+Berastagi,3.1929,98.5110,Sumatera Utara
+Danau Toba,2.6833,98.7833,Sumatera Utara
+Bintan,1.0700,104.5000,Kepulauan Riau
+Sabang,5.8939,95.3203,Aceh
+Banda Aceh,5.5483,95.3238,Aceh
+Aceh,4.6951,96.7494,Aceh
+Bunaken,1.6089,124.7636,Sulawesi Utara
+Tomohon,1.3233,124.8397,Sulawesi Utara
+Tana Toraja,-3.0861,119.8667,Sulawesi Selatan
+Parepare,-4.0167,119.6333,Sulawesi Selatan
+Kendari,-3.9722,122.5144,Sulawesi Tenggara
+Luwuk,-0.9471,122.7869,Sulawesi Tengah
+Mamuju,-2.6833,118.9000,Sulawesi Barat
+Palu,-0.9000,119.8333,Sulawesi Tengah
+Gorontalo,0.5333,123.0667,Gorontalo
+Jayapura,-2.5333,140.7167,Papua
+Wamena,-4.0950,138.9481,Papua Pegunungan
+Raja Ampat,-0.5000,130.0000,Papua Barat
+Nabire,-3.3667,135.5000,Papua Tengah
+Samosir,2.5914,98.8442,Sumatera Utara
+Tanjung Pandan,-2.7333,107.6500,Kepulauan Bangka Belitung
+Pangkalpinang,-2.1167,106.1500,Kepulauan Bangka Belitung
+Pematangsiantar,2.9600,99.0600,Sumatera Utara
+Payakumbuh,-0.2333,100.6333,Sumatera Barat
+Dumai,1.6833,101.4500,Riau
+Jayawijaya,-4.1000,139.0000,Papua Pegunungan
+Sleman,-7.7167,110.3500,DI Yogyakarta
